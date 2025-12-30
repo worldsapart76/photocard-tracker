@@ -152,3 +152,49 @@ def ingest_back(card_id: int, filename: str):
         raise
     finally:
         db.close()
+
+@app.get("/cards/{card_id}")
+def get_card(card_id: int):
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Card not found")
+        return {
+            "id": card.id,
+            "group_code": card.group_code,
+            "front_image_path": card.front_image_path,
+            "back_image_path": card.back_image_path,
+            "member": card.member,
+            "notes": card.notes,
+            "created_at": str(card.created_at),
+        }
+    finally:
+        db.close()
+
+@app.get("/cards/{card_id}/image_urls")
+def get_card_image_urls(card_id: int):
+    """
+    Returns URLs you can drop directly into <img src="..."> in the frontend.
+    """
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Card not found")
+
+        def to_url(rel_path):
+            if not rel_path:
+                return None
+            rp = str(rel_path).replace("\\", "/")
+            if rp.startswith("images/"):
+                rp = rp[len("images/"):]
+            return f"/images/{rp}"
+
+        return {
+            "id": card.id,
+            "front_url": to_url(card.front_image_path),
+            "back_url": to_url(card.back_image_path),
+        }
+    finally:
+        db.close()
