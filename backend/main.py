@@ -6,9 +6,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db import SessionLocal, engine
+from db import SessionLocal, engine, Base
 from models import Card
-from models import Card as CardModel  # same name, just explicit
 
 # ---------- Paths ----------
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -21,12 +20,9 @@ LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------- App ----------
 app = FastAPI(title="Photocard Tracker")
-
-# Serve images (inbox + library)
 app.mount("/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
 
 # ---------- DB init ----------
-from db import Base  # avoid circular import in some editors
 Base.metadata.create_all(bind=engine)
 
 def get_db() -> Session:
@@ -63,31 +59,22 @@ def list_cards(limit: int = 50):
         db.close()
 
 def format_card_filename(group_code: str, card_id: int, side: str, original_ext: str) -> str:
-    """
-    side: 'f' or 'b'
-    original_ext includes the dot, like '.jpg'
-    """
     return f"{group_code}_{card_id:06d}_{side}{original_ext.lower()}"
 
 @app.post("/ingest/front")
 def ingest_front(filename: str, group_code: str = "skz"):
-    """
-    Takes a file currently in images/inbox/<filename> and ingests it as a new card front.
-    Moves it to images/library/<group>_<id>_f.ext and creates a DB row.
-    """
     source_path = INBOX_DIR / filename
     if not source_path.exists() or not source_path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
 
     ext = source_path.suffix
     if ext == "":
-        raise HTTPException(status_code=400, detail="File has no extension; please use .jpg/.png/.webp etc.")
+        raise HTTPException(status_code=400, detail="File has no extension (.jpg/.png/etc).")
 
     db = get_db()
     try:
         # Create row first so we get an auto-increment ID
-        temp_rel_path = "PENDING"
-        card = CardModel(group_code=group_code, front_image_path=temp_rel_path)
+        card = Card(group_code=group_code, front_image_path="PENDING")
         db.add(card)
         db.commit()
         db.refresh(card)
@@ -98,7 +85,6 @@ def ingest_front(filename: str, group_code: str = "skz"):
         if dest_path.exists():
             raise HTTPException(status_code=409, detail=f"Destination already exists: {dest_path.name}")
 
-        # Move the file
         shutil.move(str(source_path), str(dest_path))
 
         # Save relative path for portability
@@ -117,50 +103,52 @@ def ingest_front(filename: str, group_code: str = "skz"):
     finally:
         db.close()
 
-@app.get("/cards/{card_id}")
-def get_card(card_id: int):
+@app.post("/ingest/back")
+def ingest_back(card_id: int, filename: str):
+    """
+    Attach a file from images/inbox as the BACK image for an existing card.
+    Moves it to images/library/<group>_<id>_b.ext and updates the DB row.
+    """
+    source_path = INBOX_DIR / filename
+    if not source_path.exists() or not source_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
+
+    ext = source_path.suffix
+    if ext == "":
+        raise HTTPException(status_code=400, detail="File has no extension (.jpg/.png/etc).")
+
     db = get_db()
     try:
         card = db.get(Card, card_id)
         if card is None:
-            raise HTTPException(status_code=404, detail="Card not found")
+            raise HTTPException(status_code=404, detail=f"Card not found: id={card_id}")
+
+        if card.back_image_path is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Card id={card_id} already has a back image (refusing overwrite).",
+            )
+
+        group_code = card.group_code
+        new_name = format_card_filename(group_code, card.id, "b", ext)
+        dest_path = LIBRARY_DIR / new_name
+
+        if dest_path.exists():
+            raise HTTPException(status_code=409, detail=f"Destination already exists: {dest_path.name}")
+
+        shutil.move(str(source_path), str(dest_path))
+
+        rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
+        card.back_image_path = rel_path
+        db.commit()
+
         return {
             "id": card.id,
-            "group_code": card.group_code,
-            "front_image_path": card.front_image_path,
             "back_image_path": card.back_image_path,
-            "member": card.member,
-            "notes": card.notes,
-            "created_at": str(card.created_at),
+            "message": f"Attached back {filename} -> {dest_path.name}",
         }
-    finally:
-        db.close()
-
-@app.get("/cards/{card_id}/image_urls")
-def get_card_image_urls(card_id: int):
-    """
-    Returns URLs you can drop directly into <img src="..."> in the frontend.
-    """
-    db = get_db()
-    try:
-        card = db.get(Card, card_id)
-        if card is None:
-            raise HTTPException(status_code=404, detail="Card not found")
-
-        def to_url(rel_path: str | None):
-            if not rel_path:
-                return None
-            # rel_path like "images/library/xxx.jpg" but the static mount is "/images"
-            # so we strip leading "images/"
-            rp = rel_path.replace("\\", "/")
-            if rp.startswith("images/"):
-                rp = rp[len("images/"):]
-            return f"/images/{rp}"
-
-        return {
-            "id": card.id,
-            "front_url": to_url(card.front_image_path),
-            "back_url": to_url(card.back_image_path),
-        }
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
