@@ -71,6 +71,8 @@ def list_cards(limit: int = 50):
                 "front_image_path": c.front_image_path,
                 "back_image_path": c.back_image_path,
                 "member": c.member,
+                "top_level_category": c.top_level_category,
+                "sub_category": c.sub_category,
                 "notes": c.notes,
                 "created_at": str(c.created_at),
             }
@@ -222,6 +224,8 @@ def get_card(card_id: int):
             "front_image_path": card.front_image_path,
             "back_image_path": card.back_image_path,
             "member": card.member,
+            "top_level_category": card.top_level_category,
+            "sub_category": card.sub_category,
             "notes": card.notes,
             "created_at": str(card.created_at),
         }
@@ -309,5 +313,67 @@ def get_card_candidates(
             }
             for card in cards
         ]
+    finally:
+        db.close()
+
+@app.post("/attach-back")
+def attach_back(
+    card_id: int,
+    filename: str,
+    force_replace: bool = False,
+):
+    source_path = INBOX_DIR / filename
+    if not source_path.exists() or not source_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
+
+    ext = source_path.suffix
+    if ext == "":
+        raise HTTPException(status_code=400, detail="File has no extension (.jpg/.png/etc).")
+
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail=f"Card not found: id={card_id}")
+
+        # If the card already has a back and force_replace is not set,
+        # return a warning-style response instead of changing anything.
+        if card.back_image_path is not None and not force_replace:
+            return {
+                "ok": False,
+                "needs_confirmation": True,
+                "message": f"Card id={card_id} already has a back image.",
+                "existing_back_image_path": card.back_image_path,
+            }
+
+        new_name = format_card_filename(card.group_code, card.id, "b", ext)
+        dest_path = LIBRARY_DIR / new_name
+
+        # If replacing, allow overwriting the existing destination file.
+        # If not replacing, still protect against collisions.
+        if dest_path.exists() and not force_replace:
+            raise HTTPException(status_code=409, detail=f"Destination already exists: {dest_path.name}")
+
+        # If replacing and the file already exists, delete it first
+        if dest_path.exists() and force_replace:
+            dest_path.unlink()
+
+        shutil.move(str(source_path), str(dest_path))
+
+        rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
+        card.back_image_path = rel_path
+        db.commit()
+
+        return {
+            "ok": True,
+            "needs_confirmation": False,
+            "id": card.id,
+            "back_image_path": card.back_image_path,
+            "message": f"Attached back {filename} -> {dest_path.name}",
+            "replaced_existing": force_replace,
+        }
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

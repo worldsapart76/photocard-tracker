@@ -1,4 +1,11 @@
 import { useEffect, useState } from "react";
+import {
+  fetchInbox,
+  fetchSubcategoryOptions,
+  ingestFront,
+  fetchCardCandidates,
+  attachBack,
+} from "./api";
 
 const API = "http://127.0.0.1:8000";
 
@@ -11,31 +18,51 @@ const MEMBERS = [
   "Felix",
   "Seungmin",
   "I.N",
-  "Multiple"
+  "Multiple",
 ];
 
 export default function InboxManager() {
   const [files, setFiles] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
 
+  const [mode, setMode] = useState("front");
+
   const [member, setMember] = useState("");
   const [topCategory, setTopCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [subcategoryOptions, setSubcategoryOptions] = useState([]);
 
+  const [includeCardsWithBack, setIncludeCardsWithBack] = useState(false);
+  const [candidates, setCandidates] = useState([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState(null);
+
+  const [message, setMessage] = useState("");
+  const [warningData, setWarningData] = useState(null);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+
   function resetSelections() {
+    setMode("front");
     setMember("");
     setTopCategory("");
     setSubcategory("");
     setSubcategoryOptions([]);
+    setIncludeCardsWithBack(false);
+    setCandidates([]);
+    setSelectedCandidateId(null);
+    setMessage("");
+    setWarningData(null);
   }
 
   async function loadInbox() {
-    const res = await fetch(`${API}/inbox`);
-    const data = await res.json();
-    setFiles(data.files || []);
-    setCurrentIndex(0);
-    resetSelections();
+    const data = await fetchInbox();
+    const newFiles = data.files || [];
+    setFiles(newFiles);
+
+    if (newFiles.length === 0) {
+      setCurrentIndex(0);
+    } else if (currentIndex > newFiles.length - 1) {
+      setCurrentIndex(newFiles.length - 1);
+    }
   }
 
   async function loadSubcategories(category) {
@@ -44,30 +71,83 @@ export default function InboxManager() {
       return;
     }
 
-    const res = await fetch(
-      `${API}/subcategory-options?top_level_category=${encodeURIComponent(category)}`
-    );
-    const data = await res.json();
+    const data = await fetchSubcategoryOptions(category);
     setSubcategoryOptions(data);
   }
 
-  async function ingest() {
+  async function loadCandidates() {
+    if (mode !== "back") {
+      setCandidates([]);
+      return;
+    }
+
+    if (!member || !topCategory || !subcategory) {
+      setCandidates([]);
+      return;
+    }
+
+    setLoadingCandidates(true);
+    try {
+      const data = await fetchCardCandidates({
+        member,
+        topLevelCategory: topCategory,
+        subCategory: subcategory,
+        includeCardsWithBack,
+      });
+      setCandidates(data);
+    } finally {
+      setLoadingCandidates(false);
+    }
+  }
+
+  async function saveFront() {
     const current = files[currentIndex];
     if (!current) return;
 
-    const params = new URLSearchParams({
-      filename: current.filename,
-      group_code: "skz",
-      member: member,
-      top_level_category: topCategory,
-      sub_category: subcategory
-    });
+    if (!member || !topCategory || !subcategory) {
+      setMessage("Please select member, top category, and subcategory first.");
+      return;
+    }
 
-    await fetch(`${API}/ingest/front?${params.toString()}`, {
-      method: "POST"
+    setMessage("");
+
+    await ingestFront({
+      filename: current.filename,
+      member,
+      topLevelCategory: topCategory,
+      subCategory: subcategory,
     });
 
     await loadInbox();
+    resetSelections();
+  }
+
+  async function saveBack(forceReplace = false) {
+    const current = files[currentIndex];
+    if (!current) return;
+
+    if (!selectedCandidateId) {
+      setMessage("Please select a matching front card first.");
+      return;
+    }
+
+    setMessage("");
+
+    const result = await attachBack({
+      cardId: selectedCandidateId,
+      filename: current.filename,
+      forceReplace,
+    });
+
+    if (result.needs_confirmation) {
+      setWarningData(result);
+      setMessage(result.message);
+      return;
+    }
+
+    setWarningData(null);
+    await loadInbox();
+    resetSelections();
   }
 
   function goPrevious() {
@@ -86,23 +166,29 @@ export default function InboxManager() {
 
   useEffect(() => {
     loadInbox();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     loadSubcategories(topCategory);
   }, [topCategory]);
 
+  useEffect(() => {
+    loadCandidates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, member, topCategory, subcategory, includeCardsWithBack]);
+
   const current = files[currentIndex];
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2 style={{ marginTop: 0, marginBottom: 12 }}>Inbox Manager</h2>
+    <div style={{ padding: 12 }}>
+      <h2 style={{ marginTop: 0, marginBottom: 6, fontSize: 18 }}>Inbox Manager</h2>
 
       {!current && <p>No images in inbox.</p>}
 
       {current && (
         <>
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6, fontSize: 14 }}>
             <strong>
               Image {currentIndex + 1} of {files.length}
             </strong>
@@ -112,46 +198,90 @@ export default function InboxManager() {
             style={{
               display: "flex",
               alignItems: "flex-start",
-              gap: 24
+              gap: 14,
             }}
           >
-            <div style={{ flex: "0 0 320px" }}>
+            <div style={{ flex: "0 0 300px" }}>
               <img
                 src={`${API}${current.url}`}
+                alt={current.filename}
                 style={{
                   width: "100%",
                   maxHeight: "75vh",
                   objectFit: "contain",
-                  border: "1px solid #ccc"
+                  border: "1px solid #ccc",
                 }}
               />
 
-              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-                <button onClick={goPrevious} disabled={currentIndex === 0}>
-                  Previous
-                </button>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  <button
+                    onClick={goPrevious}
+                    disabled={currentIndex === 0}
+                    style={{ padding: "2px 8px" }}
+                  >
+                    Previous
+                  </button>
 
-                <button
-                  onClick={goNext}
-                  disabled={currentIndex === files.length - 1}
-                >
-                  Next
-                </button>
+                  <button
+                    onClick={goNext}
+                    disabled={currentIndex === files.length - 1}
+                    style={{ padding: "2px 8px" }}
+                  >
+                    Next
+                  </button>
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: "bold", marginBottom: 4 }}>Mode</div>
+
+                  <button
+                    onClick={() => {
+                      setMode("front");
+                      setCandidates([]);
+                      setSelectedCandidateId(null);
+                      setWarningData(null);
+                      setMessage("");
+                    }}
+                    style={{
+                      marginRight: 6,
+                      padding: "2px 8px",
+                      background: mode === "front" ? "#88f" : "#eee",
+                    }}
+                  >
+                    Front
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setMode("back");
+                      setSelectedCandidateId(null);
+                      setWarningData(null);
+                      setMessage("");
+                    }}
+                    style={{
+                      padding: "2px 8px",
+                      background: mode === "back" ? "#88f" : "#eee",
+                    }}
+                  >
+                    Back
+                  </button>
+                </div>
               </div>
             </div>
 
             <div style={{ flex: 1 }}>
-              <h3 style={{ marginTop: 0 }}>Member</h3>
+              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Member</h3>
 
-              <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 10 }}>
                 {MEMBERS.map((m) => (
                   <button
                     key={m}
                     onClick={() => setMember(m)}
                     style={{
-                      margin: 4,
-                      padding: "8px 12px",
-                      background: member === m ? "#88f" : "#eee"
+                      margin: 2,
+                      padding: "2px 8px",
+                      background: member === m ? "#88f" : "#eee",
                     }}
                   >
                     {m}
@@ -159,18 +289,20 @@ export default function InboxManager() {
                 ))}
               </div>
 
-              <h3>Top Category</h3>
+              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Top Category</h3>
 
-              <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 10 }}>
                 <button
                   onClick={() => {
                     setTopCategory("Album");
                     setSubcategory("");
+                    setSelectedCandidateId(null);
+                    setWarningData(null);
                   }}
                   style={{
-                    marginRight: 10,
-                    padding: "8px 12px",
-                    background: topCategory === "Album" ? "#88f" : "#eee"
+                    marginRight: 6,
+                    padding: "2px 8px",
+                    background: topCategory === "Album" ? "#88f" : "#eee",
                   }}
                 >
                   Album
@@ -180,10 +312,12 @@ export default function InboxManager() {
                   onClick={() => {
                     setTopCategory("Non-Album");
                     setSubcategory("");
+                    setSelectedCandidateId(null);
+                    setWarningData(null);
                   }}
                   style={{
-                    padding: "8px 12px",
-                    background: topCategory === "Non-Album" ? "#88f" : "#eee"
+                    padding: "2px 8px",
+                    background: topCategory === "Non-Album" ? "#88f" : "#eee",
                   }}
                 >
                   Non-Album
@@ -192,17 +326,21 @@ export default function InboxManager() {
 
               {topCategory && (
                 <>
-                  <h3>Sub Category</h3>
+                  <h3 style={{ marginTop: 0, marginBottom: 4 }}>Sub Category</h3>
 
-                  <div style={{ marginBottom: 12 }}>
+                  <div style={{ marginBottom: 6 }}>
                     {subcategoryOptions.map((opt) => (
                       <button
                         key={opt}
-                        onClick={() => setSubcategory(opt)}
+                        onClick={() => {
+                          setSubcategory(opt);
+                          setSelectedCandidateId(null);
+                          setWarningData(null);
+                        }}
                         style={{
-                          margin: 4,
-                          padding: "8px 12px",
-                          background: subcategory === opt ? "#88f" : "#eee"
+                          margin: 2,
+                          padding: "2px 8px",
+                          background: subcategory === opt ? "#88f" : "#eee",
                         }}
                       >
                         {opt}
@@ -210,20 +348,162 @@ export default function InboxManager() {
                     ))}
                   </div>
 
-                  <div style={{ marginBottom: 20 }}>
+                  <div style={{ marginBottom: 10 }}>
                     <input
                       placeholder="Or type new value"
                       value={subcategory}
-                      onChange={(e) => setSubcategory(e.target.value)}
-                      style={{ padding: 8, width: 250 }}
+                      onChange={(e) => {
+                        setSubcategory(e.target.value);
+                        setSelectedCandidateId(null);
+                        setWarningData(null);
+                      }}
+                      style={{ padding: 4, width: 250 }}
                     />
                   </div>
                 </>
               )}
 
-              <button onClick={ingest} style={{ padding: "10px 16px" }}>
-                Save and Next
-              </button>
+              {mode === "back" && (
+                <>
+                  <h3 style={{ marginTop: 0, marginBottom: 4 }}>Matching Front Cards</h3>
+
+                  <label style={{ display: "block", marginBottom: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={includeCardsWithBack}
+                      onChange={(e) => {
+                        setIncludeCardsWithBack(e.target.checked);
+                        setSelectedCandidateId(null);
+                        setWarningData(null);
+                      }}
+                    />{" "}
+                    Show all cards, including ones that already have a back
+                  </label>
+
+                  {!member || !topCategory || !subcategory ? (
+                    <p style={{ color: "#666", marginTop: 0 }}>
+                      Select member, top category, and subcategory to load candidate front cards.
+                    </p>
+                  ) : loadingCandidates ? (
+                    <p style={{ marginTop: 0 }}>Loading matching cards...</p>
+                  ) : candidates.length === 0 ? (
+                    <p style={{ marginTop: 0 }}>No matching front cards found.</p>
+                  ) : (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                        gap: 8,
+                        marginBottom: 10,
+                        maxHeight: "38vh",
+                        overflowY: "auto",
+                        paddingRight: 4,
+                      }}
+                    >
+                      {candidates.map((card) => (
+                        <button
+                          key={card.id}
+                          onClick={() => {
+                            setSelectedCandidateId(card.id);
+                            setWarningData(null);
+                            setMessage("");
+                          }}
+                          style={{
+                            border:
+                              selectedCandidateId === card.id
+                                ? "3px solid #4a67ff"
+                                : "1px solid #ccc",
+                            borderRadius: 8,
+                            padding: 4,
+                            background: "#fff",
+                            cursor: "pointer",
+                            textAlign: "left",
+                          }}
+                        >
+                          <img
+                            src={`${API}${card.front_url}`}
+                            alt={`Card ${card.id}`}
+                            style={{
+                              width: "100%",
+                              aspectRatio: "55 / 85",
+                              objectFit: "cover",
+                              borderRadius: 4,
+                              marginBottom: 4,
+                            }}
+                          />
+
+                          <div style={{ fontSize: 11, lineHeight: 1.25 }}>
+                            <div>
+                              <strong>ID:</strong> {card.id}
+                            </div>
+                            <div>{card.member || "—"}</div>
+                            <div>{card.sub_category || "—"}</div>
+                            <div style={{ color: card.has_back ? "#b00" : "#090" }}>
+                              {card.has_back ? "Already has back" : "No back yet"}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {message && (
+                <div
+                  style={{
+                    marginBottom: 8,
+                    padding: 8,
+                    border: "1px solid #ccc",
+                    background: "#f8f8f8",
+                    fontSize: 13,
+                  }}
+                >
+                  {message}
+                </div>
+              )}
+
+              {warningData && (
+                <div
+                  style={{
+                    marginBottom: 8,
+                    padding: 8,
+                    border: "1px solid #d99",
+                    background: "#fff3f3",
+                    fontSize: 13,
+                  }}
+                >
+                  <div style={{ marginBottom: 8 }}>
+                    This card already has a back image.
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => {
+                        setWarningData(null);
+                        setMessage("");
+                      }}
+                      style={{ padding: "2px 8px" }}
+                    >
+                      Cancel
+                    </button>
+
+                    <button onClick={() => saveBack(true)} style={{ padding: "2px 8px" }}>
+                      Replace Anyway
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {mode === "front" ? (
+                <button onClick={saveFront} style={{ padding: "4px 10px" }}>
+                  Save Front and Next
+                </button>
+              ) : (
+                <button onClick={() => saveBack(false)} style={{ padding: "4px 10px" }}>
+                  Attach Back and Next
+                </button>
+              )}
             </div>
           </div>
         </>
