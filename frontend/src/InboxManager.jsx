@@ -16,40 +16,43 @@ const MEMBERS = [
 
 export default function InboxManager() {
   const [files, setFiles] = useState([]);
-  const [current, setCurrent] = useState(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   const [member, setMember] = useState("");
   const [topCategory, setTopCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [subcategoryOptions, setSubcategoryOptions] = useState([]);
 
+  function resetSelections() {
+    setMember("");
+    setTopCategory("");
+    setSubcategory("");
+    setSubcategoryOptions([]);
+  }
+
   async function loadInbox() {
     const res = await fetch(`${API}/inbox`);
     const data = await res.json();
-
-    setFiles(data.files);
-
-    if (data.files.length > 0) {
-      setCurrent(data.files[0]);
-    } else {
-      setCurrent(null);
-    }
+    setFiles(data.files || []);
+    setCurrentIndex(0);
+    resetSelections();
   }
 
   async function loadSubcategories(category) {
-    if (!category) return;
+    if (!category) {
+      setSubcategoryOptions([]);
+      return;
+    }
 
     const res = await fetch(
-      `${API}/subcategory-options?top_level_category=${encodeURIComponent(
-        category
-      )}`
+      `${API}/subcategory-options?top_level_category=${encodeURIComponent(category)}`
     );
-
     const data = await res.json();
     setSubcategoryOptions(data);
   }
 
   async function ingest() {
+    const current = files[currentIndex];
     if (!current) return;
 
     const params = new URLSearchParams({
@@ -64,12 +67,21 @@ export default function InboxManager() {
       method: "POST"
     });
 
-    setMember("");
-    setTopCategory("");
-    setSubcategory("");
-    setSubcategoryOptions([]);
-
     await loadInbox();
+  }
+
+  function goPrevious() {
+    if (currentIndex > 0) {
+      setCurrentIndex(currentIndex - 1);
+      resetSelections();
+    }
+  }
+
+  function goNext() {
+    if (currentIndex < files.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+      resetSelections();
+    }
   }
 
   useEffect(() => {
@@ -80,88 +92,139 @@ export default function InboxManager() {
     loadSubcategories(topCategory);
   }, [topCategory]);
 
+  const current = files[currentIndex];
+
   return (
     <div style={{ padding: 20 }}>
-      <h2>Inbox Manager</h2>
+      <h2 style={{ marginTop: 0, marginBottom: 12 }}>Inbox Manager</h2>
 
       {!current && <p>No images in inbox.</p>}
 
       {current && (
         <>
-          <img
-            src={`${API}${current.url}`}
-            style={{ height: 300, border: "1px solid #ccc" }}
-          />
-
-          <h3>Member</h3>
-
-          <div>
-            {MEMBERS.map((m) => (
-              <button
-                key={m}
-                onClick={() => setMember(m)}
-                style={{
-                  margin: 4,
-                  background: member === m ? "#88f" : "#eee"
-                }}
-              >
-                {m}
-              </button>
-            ))}
+          <div style={{ marginBottom: 12 }}>
+            <strong>
+              Image {currentIndex + 1} of {files.length}
+            </strong>
           </div>
 
-          <h3>Top Category</h3>
-
-          <button
-            onClick={() => setTopCategory("Album")}
+          <div
             style={{
-              marginRight: 10,
-              background: topCategory === "Album" ? "#88f" : "#eee"
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 24
             }}
           >
-            Album
-          </button>
+            <div style={{ flex: "0 0 320px" }}>
+              <img
+                src={`${API}${current.url}`}
+                style={{
+                  width: "100%",
+                  maxHeight: "75vh",
+                  objectFit: "contain",
+                  border: "1px solid #ccc"
+                }}
+              />
 
-          <button
-            onClick={() => setTopCategory("Non-Album")}
-            style={{
-              background: topCategory === "Non-Album" ? "#88f" : "#eee"
-            }}
-          >
-            Non-Album
-          </button>
+              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                <button onClick={goPrevious} disabled={currentIndex === 0}>
+                  Previous
+                </button>
 
-          {topCategory && (
-            <>
-              <h3>Sub Category</h3>
+                <button
+                  onClick={goNext}
+                  disabled={currentIndex === files.length - 1}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
 
-              <div>
-                {subcategoryOptions.map((opt) => (
+            <div style={{ flex: 1 }}>
+              <h3 style={{ marginTop: 0 }}>Member</h3>
+
+              <div style={{ marginBottom: 16 }}>
+                {MEMBERS.map((m) => (
                   <button
-                    key={opt}
-                    onClick={() => setSubcategory(opt)}
+                    key={m}
+                    onClick={() => setMember(m)}
                     style={{
                       margin: 4,
-                      background: subcategory === opt ? "#88f" : "#eee"
+                      padding: "8px 12px",
+                      background: member === m ? "#88f" : "#eee"
                     }}
                   >
-                    {opt}
+                    {m}
                   </button>
                 ))}
               </div>
 
-              <input
-                placeholder="Or type new value"
-                value={subcategory}
-                onChange={(e) => setSubcategory(e.target.value)}
-              />
-            </>
-          )}
+              <h3>Top Category</h3>
 
-          <div style={{ marginTop: 20 }}>
-            <button onClick={ingest} style={{ padding: 10 }}>
-              Save and Next
-            </button>
+              <div style={{ marginBottom: 16 }}>
+                <button
+                  onClick={() => {
+                    setTopCategory("Album");
+                    setSubcategory("");
+                  }}
+                  style={{
+                    marginRight: 10,
+                    padding: "8px 12px",
+                    background: topCategory === "Album" ? "#88f" : "#eee"
+                  }}
+                >
+                  Album
+                </button>
+
+                <button
+                  onClick={() => {
+                    setTopCategory("Non-Album");
+                    setSubcategory("");
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    background: topCategory === "Non-Album" ? "#88f" : "#eee"
+                  }}
+                >
+                  Non-Album
+                </button>
+              </div>
+
+              {topCategory && (
+                <>
+                  <h3>Sub Category</h3>
+
+                  <div style={{ marginBottom: 12 }}>
+                    {subcategoryOptions.map((opt) => (
+                      <button
+                        key={opt}
+                        onClick={() => setSubcategory(opt)}
+                        style={{
+                          margin: 4,
+                          padding: "8px 12px",
+                          background: subcategory === opt ? "#88f" : "#eee"
+                        }}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{ marginBottom: 20 }}>
+                    <input
+                      placeholder="Or type new value"
+                      value={subcategory}
+                      onChange={(e) => setSubcategory(e.target.value)}
+                      style={{ padding: 8, width: 250 }}
+                    />
+                  </div>
+                </>
+              )}
+
+              <button onClick={ingest} style={{ padding: "10px 16px" }}>
+                Save and Next
+              </button>
+            </div>
           </div>
         </>
       )}
