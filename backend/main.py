@@ -35,7 +35,18 @@ def health():
 @app.get("/inbox")
 def list_inbox():
     files = [p.name for p in INBOX_DIR.iterdir() if p.is_file()]
-    return {"count": len(files), "files": sorted(files)}
+    files = sorted(files)
+
+    return {
+        "count": len(files),
+        "files": [
+            {
+                "filename": name,
+                "url": f"/images/inbox/{name}",
+            }
+            for name in files
+        ],
+    }
 
 @app.get("/cards")
 def list_cards(limit: int = 50):
