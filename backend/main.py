@@ -270,3 +270,44 @@ def get_subcategory_options(top_level_category: str):
         return [option.value for option in options]
     finally:
         db.close()
+        
+@app.get("/card-candidates")
+def get_card_candidates(
+    member: str | None = None,
+    top_level_category: str | None = None,
+    sub_category: str | None = None,
+    include_cards_with_back: bool = False,
+):
+    db = get_db()
+    try:
+        query = db.query(Card)
+
+        if member:
+            query = query.filter(Card.member == member)
+
+        if top_level_category:
+            query = query.filter(Card.top_level_category == top_level_category)
+
+        if sub_category:
+            query = query.filter(Card.sub_category == sub_category)
+
+        if not include_cards_with_back:
+            query = query.filter(Card.back_image_path.is_(None))
+
+        cards = query.order_by(Card.id.desc()).all()
+
+        return [
+            {
+                "id": card.id,
+                "member": card.member,
+                "top_level_category": card.top_level_category,
+                "sub_category": card.sub_category,
+                "front_image_path": card.front_image_path,
+                "back_image_path": card.back_image_path,
+                "front_url": f"/{card.front_image_path.replace('\\', '/')}" if card.front_image_path else None,
+                "has_back": card.back_image_path is not None,
+            }
+            for card in cards
+        ]
+    finally:
+        db.close()
