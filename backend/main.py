@@ -3,6 +3,7 @@ import shutil
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,15 @@ LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------- App ----------
 app = FastAPI(title="Photocard Tracker")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
 
 # ---------- DB init ----------
