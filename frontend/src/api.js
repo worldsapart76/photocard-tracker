@@ -1,86 +1,91 @@
-const API_BASE = "http://127.0.0.1:8000";
-
-export async function fetchCards(limit = 200) {
-  const r = await fetch(`${API_BASE}/cards?limit=${limit}`);
-  if (!r.ok) throw new Error("Failed to fetch cards");
-  return r.json();
-}
-
-export async function fetchCardImageUrls(id) {
-  const r = await fetch(`${API_BASE}/cards/${id}/image_urls`);
-  if (!r.ok) throw new Error("Failed to fetch image urls");
-  return r.json();
-}
+const API = "http://127.0.0.1:8000";
 
 export async function fetchInbox() {
-  const r = await fetch(`${API_BASE}/inbox`);
-  if (!r.ok) throw new Error("Failed to fetch inbox");
-  return r.json();
+  const res = await fetch(`${API}/inbox`);
+  if (!res.ok) throw new Error("Failed to fetch inbox");
+  return res.json();
 }
 
 export async function fetchSubcategoryOptions(topLevelCategory) {
-  const r = await fetch(
-    `${API_BASE}/subcategory-options?top_level_category=${encodeURIComponent(topLevelCategory)}`
+  const res = await fetch(
+    `${API}/subcategory-options?top_level_category=${encodeURIComponent(topLevelCategory)}`
   );
-  if (!r.ok) throw new Error("Failed to fetch subcategory options");
-  return r.json();
+  if (!res.ok) throw new Error("Failed to fetch subcategory options");
+  return res.json();
 }
 
 export async function ingestFront({
   filename,
+  groupCode,
   member,
   topLevelCategory,
   subCategory,
+  ownershipStatus,
+  price,
 }) {
   const params = new URLSearchParams({
     filename,
-    group_code: "skz",
-    member: member || "",
-    top_level_category: topLevelCategory || "",
-    sub_category: subCategory || "",
+    group_code: groupCode,
+    member,
+    top_level_category: topLevelCategory,
+    sub_category: subCategory,
+    ownership_status: ownershipStatus,
   });
 
-  const r = await fetch(`${API_BASE}/ingest/front?${params.toString()}`, {
+  if (price !== "" && price !== null && price !== undefined) {
+    params.append("price", String(price));
+  }
+
+  const res = await fetch(`${API}/ingest/front?${params.toString()}`, {
     method: "POST",
   });
 
-  if (!r.ok) throw new Error("Failed to ingest front");
-  return r.json();
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || "Failed to ingest front");
+  }
+
+  return res.json();
 }
 
 export async function fetchCardCandidates({
+  groupCode,
   member,
   topLevelCategory,
   subCategory,
   includeCardsWithBack = false,
 }) {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({
+    group_code: groupCode,
+    member,
+    top_level_category: topLevelCategory,
+    sub_category: subCategory,
+    include_cards_with_back: includeCardsWithBack ? "true" : "false",
+  });
 
-  if (member) params.set("member", member);
-  if (topLevelCategory) params.set("top_level_category", topLevelCategory);
-  if (subCategory) params.set("sub_category", subCategory);
-  params.set("include_cards_with_back", includeCardsWithBack ? "true" : "false");
-
-  const r = await fetch(`${API_BASE}/card-candidates?${params.toString()}`);
-  if (!r.ok) throw new Error("Failed to fetch card candidates");
-  return r.json();
+  const res = await fetch(`${API}/card-candidates?${params.toString()}`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || "Failed to fetch card candidates");
+  }
+  return res.json();
 }
 
-export async function attachBack({
-  cardId,
-  filename,
-  forceReplace = false,
-}) {
+export async function attachBack({ cardId, filename, forceReplace = false }) {
   const params = new URLSearchParams({
     card_id: String(cardId),
     filename,
     force_replace: forceReplace ? "true" : "false",
   });
 
-  const r = await fetch(`${API_BASE}/attach-back?${params.toString()}`, {
+  const res = await fetch(`${API}/attach-back?${params.toString()}`, {
     method: "POST",
   });
 
-  if (!r.ok) throw new Error("Failed to attach back");
-  return r.json();
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || "Failed to attach back");
+  }
+
+  return res.json();
 }

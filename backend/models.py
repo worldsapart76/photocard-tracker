@@ -19,6 +19,11 @@ class Card(Base):
     top_level_category = Column(String, nullable=True)
     sub_category = Column(String, nullable=True)
 
+    # New fields (Step 2)
+    source = Column(String, nullable=True)
+    ownership_status = Column(String, nullable=False, default="Owned")
+    price = Column(Integer, nullable=True)  # store as integer cents for now
+
     notes = Column(String, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -33,4 +38,21 @@ class SubcategoryOption(Base):
 
     __table_args__ = (
         UniqueConstraint("top_level_category", "value", name="uq_top_level_value"),
+    )
+    
+class SourceOption(Base):
+    __tablename__ = "source_options"
+
+    id = Column(Integer, primary_key=True, index=True)
+    top_level_category = Column(String, nullable=False)
+    sub_category = Column(String, nullable=False)
+    value = Column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "top_level_category",
+            "sub_category",
+            "value",
+            name="uq_source_top_level_sub_value",
+        ),
     )

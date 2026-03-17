@@ -1,14 +1,15 @@
 from pathlib import Path
 import shutil
+from pydantic import BaseModel
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db import SessionLocal, engine, Base
-from models import Card, SubcategoryOption
+from models import Card, SubcategoryOption, SourceOption
 
 # ---------- Paths ----------
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,34 @@ Base.metadata.create_all(bind=engine)
 def get_db() -> Session:
     return SessionLocal()
 
+def get_image_version(rel_path: str | None):
+    if not rel_path:
+        return None
+
+    file_path = APP_ROOT / rel_path
+    if not file_path.exists() or not file_path.is_file():
+        return None
+
+    return int(file_path.stat().st_mtime_ns)
+
+def delete_image_file(rel_path: str | None):
+    if not rel_path:
+        return
+
+    file_path = APP_ROOT / rel_path
+    if file_path.exists() and file_path.is_file():
+        file_path.unlink()
+
+class CardUpdateRequest(BaseModel):
+    group_code: str | None = None
+    member: str | None = None
+    top_level_category: str | None = None
+    sub_category: str | None = None
+    source: str | None = None
+    ownership_status: str | None = None
+    price: int | None = None
+    notes: str | None = None
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -58,6 +87,31 @@ def list_inbox():
         ],
     }
 
+@app.post("/upload-to-inbox")
+def upload_to_inbox(file: UploadFile = File(...)):
+    original_name = file.filename or "upload.bin"
+    safe_name = Path(original_name).name
+
+    dest_path = INBOX_DIR / safe_name
+
+    if dest_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"File already exists in inbox: {safe_name}",
+        )
+
+    try:
+        with dest_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        return {
+            "ok": True,
+            "filename": safe_name,
+            "message": f"Uploaded {safe_name} to inbox",
+        }
+    finally:
+        file.file.close()
+
 @app.get("/cards")
 def list_cards(limit: int = 50):
     db = get_db()
@@ -70,9 +124,14 @@ def list_cards(limit: int = 50):
                 "group_code": c.group_code,
                 "front_image_path": c.front_image_path,
                 "back_image_path": c.back_image_path,
+                "front_image_version": get_image_version(c.front_image_path),
+                "back_image_version": get_image_version(c.back_image_path),
                 "member": c.member,
                 "top_level_category": c.top_level_category,
                 "sub_category": c.sub_category,
+                "source": c.source,
+                "ownership_status": c.ownership_status,
+                "price": c.price,
                 "notes": c.notes,
                 "created_at": str(c.created_at),
             }
@@ -91,6 +150,8 @@ def ingest_front(
     member: str | None = None,
     top_level_category: str | None = None,
     sub_category: str | None = None,
+    ownership_status: str | None = None,
+    price: int | None = None,
 ):
     source_path = INBOX_DIR / filename
     if not source_path.exists() or not source_path.is_file():
@@ -102,17 +163,19 @@ def ingest_front(
 
     db = get_db()
     try:
-        # Create row first so we get an auto-increment ID
         card = Card(
             group_code=group_code,
             front_image_path="PENDING",
             member=member,
             top_level_category=top_level_category,
             sub_category=sub_category,
+            ownership_status=ownership_status,
+            price=price,
         )
         db.add(card)
-        db.commit()
-        db.refresh(card)
+
+        # Assign auto-increment ID without committing yet
+        db.flush()
 
         new_name = format_card_filename(group_code, card.id, "f", ext)
         dest_path = LIBRARY_DIR / new_name
@@ -122,11 +185,9 @@ def ingest_front(
 
         shutil.move(str(source_path), str(dest_path))
 
-        # Save relative path for portability
         rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
         card.front_image_path = rel_path
 
-        # If a category pair was provided, save it as a reusable option
         if top_level_category and sub_category:
             existing_option = (
                 db.query(SubcategoryOption)
@@ -146,6 +207,7 @@ def ingest_front(
                 )
 
         db.commit()
+        db.refresh(card)
 
         return {
             "id": card.id,
@@ -153,6 +215,8 @@ def ingest_front(
             "member": card.member,
             "top_level_category": card.top_level_category,
             "sub_category": card.sub_category,
+            "ownership_status": card.ownership_status,
+            "price": card.price,
             "message": f"Ingested {filename} -> {dest_path.name}",
         }
     except Exception:
@@ -223,12 +287,230 @@ def get_card(card_id: int):
             "group_code": card.group_code,
             "front_image_path": card.front_image_path,
             "back_image_path": card.back_image_path,
+            "front_image_version": get_image_version(card.front_image_path),
+            "back_image_version": get_image_version(card.back_image_path),
             "member": card.member,
             "top_level_category": card.top_level_category,
             "sub_category": card.sub_category,
+            "source": card.source,
+            "ownership_status": card.ownership_status,
+            "price": card.price,
             "notes": card.notes,
             "created_at": str(card.created_at),
         }
+    finally:
+        db.close()
+
+@app.put("/cards/{card_id}")
+def update_card(card_id: int, payload: CardUpdateRequest):
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Card not found")
+
+        updates = payload.model_dump(exclude_unset=True)
+
+        allowed_fields = {
+            "group_code",
+            "member",
+            "top_level_category",
+            "sub_category",
+            "source",
+            "ownership_status",
+            "price",
+            "notes",
+        }
+
+        for key, value in updates.items():
+            if key in allowed_fields:
+                setattr(card, key, value)
+
+        if card.top_level_category and card.sub_category and card.source:
+            existing_source_option = (
+                db.query(SourceOption)
+                .filter(
+                    SourceOption.top_level_category == card.top_level_category,
+                    SourceOption.sub_category == card.sub_category,
+                    SourceOption.value == card.source,
+                )
+                .first()
+            )
+
+            if existing_source_option is None:
+                db.add(
+                    SourceOption(
+                        top_level_category=card.top_level_category,
+                        sub_category=card.sub_category,
+                        value=card.source,
+                    )
+                )
+
+        db.commit()
+        db.refresh(card)
+
+        return {
+            "id": card.id,
+            "group_code": card.group_code,
+            "front_image_path": card.front_image_path,
+            "back_image_path": card.back_image_path,
+            "front_image_version": get_image_version(card.front_image_path),
+            "back_image_version": get_image_version(card.back_image_path),
+            "member": card.member,
+            "top_level_category": card.top_level_category,
+            "sub_category": card.sub_category,
+            "source": card.source,
+            "ownership_status": card.ownership_status,
+            "price": card.price,
+            "notes": card.notes,
+            "created_at": str(card.created_at),
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@app.delete("/cards/{card_id}")
+def delete_card(card_id: int):
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Card not found")
+
+        front_image_path = card.front_image_path
+        back_image_path = card.back_image_path
+
+        db.delete(card)
+        db.commit()
+
+        delete_image_file(front_image_path)
+        delete_image_file(back_image_path)
+
+        return {
+            "ok": True,
+            "deleted_id": card_id,
+            "deleted_front_image": bool(front_image_path),
+            "deleted_back_image": bool(back_image_path),
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@app.post("/cards/{card_id}/replace-front")
+def replace_front_image(card_id: int, filename: str):
+    source_path = INBOX_DIR / filename
+    if not source_path.exists() or not source_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
+
+    ext = source_path.suffix
+    if ext == "":
+        raise HTTPException(status_code=400, detail="File has no extension (.jpg/.png/etc).")
+
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Card not found")
+
+        new_name = format_card_filename(card.group_code, card.id, "f", ext)
+        dest_path = LIBRARY_DIR / new_name
+
+        if card.front_image_path:
+            old_path = APP_ROOT / card.front_image_path
+            if old_path.exists() and old_path.is_file():
+                old_path.unlink()
+
+        if dest_path.exists():
+            dest_path.unlink()
+
+        shutil.move(str(source_path), str(dest_path))
+
+        rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
+        card.front_image_path = rel_path
+        db.commit()
+        db.refresh(card)
+
+        return {
+            "id": card.id,
+            "group_code": card.group_code,
+            "front_image_path": card.front_image_path,
+            "back_image_path": card.back_image_path,
+            "front_image_version": get_image_version(card.front_image_path),
+            "back_image_version": get_image_version(card.back_image_path),
+            "member": card.member,
+            "top_level_category": card.top_level_category,
+            "sub_category": card.sub_category,
+            "source": card.source,
+            "ownership_status": card.ownership_status,
+            "price": card.price,
+            "notes": card.notes,
+            "created_at": str(card.created_at),
+            "message": f"Replaced front image with {dest_path.name}",
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@app.post("/cards/{card_id}/replace-back")
+def replace_back_image(card_id: int, filename: str):
+    source_path = INBOX_DIR / filename
+    if not source_path.exists() or not source_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
+
+    ext = source_path.suffix
+    if ext == "":
+        raise HTTPException(status_code=400, detail="File has no extension (.jpg/.png/etc).")
+
+    db = get_db()
+    try:
+        card = db.get(Card, card_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Card not found")
+
+        new_name = format_card_filename(card.group_code, card.id, "b", ext)
+        dest_path = LIBRARY_DIR / new_name
+
+        if card.back_image_path:
+            old_path = APP_ROOT / card.back_image_path
+            if old_path.exists() and old_path.is_file():
+                old_path.unlink()
+
+        if dest_path.exists():
+            dest_path.unlink()
+
+        shutil.move(str(source_path), str(dest_path))
+
+        rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
+        card.back_image_path = rel_path
+        db.commit()
+        db.refresh(card)
+
+        return {
+            "id": card.id,
+            "group_code": card.group_code,
+            "front_image_path": card.front_image_path,
+            "back_image_path": card.back_image_path,
+            "front_image_version": get_image_version(card.front_image_path),
+            "back_image_version": get_image_version(card.back_image_path),
+            "member": card.member,
+            "top_level_category": card.top_level_category,
+            "sub_category": card.sub_category,
+            "source": card.source,
+            "ownership_status": card.ownership_status,
+            "price": card.price,
+            "notes": card.notes,
+            "created_at": str(card.created_at),
+            "message": f"Replaced back image with {dest_path.name}",
+        }
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -259,7 +541,6 @@ def get_card_image_urls(card_id: int):
     finally:
         db.close()
 
-
 @app.get("/subcategory-options")
 def get_subcategory_options(top_level_category: str):
     db = get_db()
@@ -274,9 +555,28 @@ def get_subcategory_options(top_level_category: str):
         return [option.value for option in options]
     finally:
         db.close()
-        
+
+@app.get("/source-options")
+def get_source_options(top_level_category: str, sub_category: str):
+    db = get_db()
+    try:
+        options = (
+            db.query(SourceOption)
+            .filter(
+                SourceOption.top_level_category == top_level_category,
+                SourceOption.sub_category == sub_category,
+            )
+            .order_by(SourceOption.value.asc())
+            .all()
+        )
+
+        return [option.value for option in options]
+    finally:
+        db.close()
+
 @app.get("/card-candidates")
 def get_card_candidates(
+    group_code: str | None = None,
     member: str | None = None,
     top_level_category: str | None = None,
     sub_category: str | None = None,
@@ -285,6 +585,9 @@ def get_card_candidates(
     db = get_db()
     try:
         query = db.query(Card)
+
+        if group_code:
+            query = query.filter(Card.group_code == group_code)
 
         if member:
             query = query.filter(Card.member == member)
@@ -336,8 +639,6 @@ def attach_back(
         if card is None:
             raise HTTPException(status_code=404, detail=f"Card not found: id={card_id}")
 
-        # If the card already has a back and force_replace is not set,
-        # return a warning-style response instead of changing anything.
         if card.back_image_path is not None and not force_replace:
             return {
                 "ok": False,
@@ -349,12 +650,9 @@ def attach_back(
         new_name = format_card_filename(card.group_code, card.id, "b", ext)
         dest_path = LIBRARY_DIR / new_name
 
-        # If replacing, allow overwriting the existing destination file.
-        # If not replacing, still protect against collisions.
         if dest_path.exists() and not force_replace:
             raise HTTPException(status_code=409, detail=f"Destination already exists: {dest_path.name}")
 
-        # If replacing and the file already exists, delete it first
         if dest_path.exists() and force_replace:
             dest_path.unlink()
 

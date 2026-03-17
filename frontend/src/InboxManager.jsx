@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getMembersForGroup } from "./utils/groupUtils";
 import {
   fetchInbox,
   fetchSubcategoryOptions,
@@ -9,28 +10,20 @@ import {
 
 const API = "http://127.0.0.1:8000";
 
-const MEMBERS = [
-  "Bang Chan",
-  "Lee Know",
-  "Changbin",
-  "Hyunjin",
-  "Han",
-  "Felix",
-  "Seungmin",
-  "I.N",
-  "Multiple",
-];
-
 export default function InboxManager() {
   const [files, setFiles] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
 
   const [mode, setMode] = useState("front");
 
+  const [groupCode, setGroupCode] = useState("skz");
   const [member, setMember] = useState("");
   const [topCategory, setTopCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [subcategoryOptions, setSubcategoryOptions] = useState([]);
+
+  const [ownershipStatus, setOwnershipStatus] = useState("Owned");
+  const [price, setPrice] = useState("");
 
   const [includeCardsWithBack, setIncludeCardsWithBack] = useState(false);
   const [candidates, setCandidates] = useState([]);
@@ -40,12 +33,17 @@ export default function InboxManager() {
   const [warningData, setWarningData] = useState(null);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
 
+  const memberOptions = getMembersForGroup(groupCode);
+
   function resetSelections() {
     setMode("front");
+    setGroupCode("skz");
     setMember("");
     setTopCategory("");
     setSubcategory("");
     setSubcategoryOptions([]);
+    setOwnershipStatus("Owned");
+    setPrice("");
     setIncludeCardsWithBack(false);
     setCandidates([]);
     setSelectedCandidateId(null);
@@ -89,6 +87,7 @@ export default function InboxManager() {
     setLoadingCandidates(true);
     try {
       const data = await fetchCardCandidates({
+        groupCode,
         member,
         topLevelCategory: topCategory,
         subCategory: subcategory,
@@ -105,7 +104,7 @@ export default function InboxManager() {
     if (!current) return;
 
     if (!member || !topCategory || !subcategory) {
-      setMessage("Please select member, top category, and subcategory first.");
+      setMessage("Please select group, member, top category, and subcategory first.");
       return;
     }
 
@@ -113,9 +112,12 @@ export default function InboxManager() {
 
     await ingestFront({
       filename: current.filename,
+      groupCode,
       member,
       topLevelCategory: topCategory,
       subCategory: subcategory,
+      ownershipStatus,
+      price: price === "" ? "" : Number(price),
     });
 
     await loadInbox();
@@ -164,6 +166,15 @@ export default function InboxManager() {
     }
   }
 
+  function handleGroupChange(nextGroupCode) {
+    setGroupCode(nextGroupCode);
+    setMember("");
+    setSelectedCandidateId(null);
+    setWarningData(null);
+    setMessage("");
+    setCandidates([]);
+  }
+
   useEffect(() => {
     loadInbox();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,7 +187,7 @@ export default function InboxManager() {
   useEffect(() => {
     loadCandidates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, member, topCategory, subcategory, includeCardsWithBack]);
+  }, [mode, groupCode, member, topCategory, subcategory, includeCardsWithBack]);
 
   const current = files[currentIndex];
 
@@ -271,13 +282,55 @@ export default function InboxManager() {
             </div>
 
             <div style={{ flex: 1 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Group</h3>
+
+              <div style={{ marginBottom: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => handleGroupChange("skz")}
+                  style={{
+                    padding: "2px 8px",
+                    background: groupCode === "skz" ? "#88f" : "#eee",
+                  }}
+                >
+                  Stray Kids
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleGroupChange("atz")}
+                  style={{
+                    padding: "2px 8px",
+                    background: groupCode === "atz" ? "#88f" : "#eee",
+                  }}
+                >
+                  ATEEZ
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleGroupChange("txt")}
+                  style={{
+                    padding: "2px 8px",
+                    background: groupCode === "txt" ? "#88f" : "#eee",
+                  }}
+                >
+                  TXT
+                </button>
+              </div>
+
               <h3 style={{ marginTop: 0, marginBottom: 4 }}>Member</h3>
 
               <div style={{ marginBottom: 10 }}>
-                {MEMBERS.map((m) => (
+                {memberOptions.map((m) => (
                   <button
                     key={m}
-                    onClick={() => setMember(m)}
+                    onClick={() => {
+                      setMember(m);
+                      setSelectedCandidateId(null);
+                      setWarningData(null);
+                      setMessage("");
+                    }}
                     style={{
                       margin: 2,
                       padding: "2px 8px",
@@ -362,6 +415,56 @@ export default function InboxManager() {
                   </div>
                 </>
               )}
+
+              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Ownership Status</h3>
+
+              <div style={{ marginBottom: 10 }}>
+                <button
+                  onClick={() => setOwnershipStatus("Owned")}
+                  style={{
+                    marginRight: 6,
+                    padding: "2px 8px",
+                    background: ownershipStatus === "Owned" ? "#88f" : "#eee",
+                  }}
+                >
+                  Owned
+                </button>
+
+                <button
+                  onClick={() => setOwnershipStatus("Want")}
+                  style={{
+                    marginRight: 6,
+                    padding: "2px 8px",
+                    background: ownershipStatus === "Want" ? "#88f" : "#eee",
+                  }}
+                >
+                  Want
+                </button>
+
+                <button
+                  onClick={() => setOwnershipStatus("For Trade")}
+                  style={{
+                    padding: "2px 8px",
+                    background: ownershipStatus === "For Trade" ? "#88f" : "#eee",
+                  }}
+                >
+                  For Trade
+                </button>
+              </div>
+
+              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Price</h3>
+
+              <div style={{ marginBottom: 10 }}>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="Optional"
+                  style={{ padding: 4, width: 120 }}
+                />
+              </div>
 
               {mode === "back" && (
                 <>

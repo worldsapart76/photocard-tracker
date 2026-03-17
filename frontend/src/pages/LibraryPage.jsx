@@ -10,6 +10,7 @@ import { buildDisplayItems } from "../utils/libraryTransforms";
 import { filterCards } from "../utils/filterUtils";
 import { sortCards } from "../utils/sortUtils";
 import { useLibraryPagination } from "../hooks/useLibraryPagination";
+import { sortMembersForGroup } from "../utils/groupUtils";
 
 const emptyFilters = {
   search: "",
@@ -51,16 +52,23 @@ export default function LibraryPage() {
     loadCards();
   }, []);
 
-  const availableOptions = useMemo(() => {
-    return {
-      members: [...new Set(cards.map((c) => c.member).filter(Boolean))].sort(),
-      groupCodes: [...new Set(cards.map((c) => c.group_code).filter(Boolean))].sort(),
-      topLevelCategories: [
-        ...new Set(cards.map((c) => c.top_level_category).filter(Boolean)),
-      ].sort(),
-      subCategories: [...new Set(cards.map((c) => c.sub_category).filter(Boolean))].sort(),
-    };
-  }, [cards]);
+const availableOptions = useMemo(() => {
+  const uniqueMembers = [...new Set(cards.map((c) => c.member).filter(Boolean))];
+  const uniqueGroupCodes = [...new Set(cards.map((c) => c.group_code).filter(Boolean))].sort();
+  const uniqueTopLevelCategories = [
+    ...new Set(cards.map((c) => c.top_level_category).filter(Boolean)),
+  ].sort();
+  const uniqueSubCategories = [...new Set(cards.map((c) => c.sub_category).filter(Boolean))].sort();
+
+  const orderedMembers = sortMembersForGroup(uniqueMembers, "skz");
+
+  return {
+    members: orderedMembers,
+    groupCodes: uniqueGroupCodes,
+    topLevelCategories: uniqueTopLevelCategories,
+    subCategories: uniqueSubCategories,
+  };
+}, [cards]);
 
   const filteredCards = useMemo(() => {
     return filterCards(cards, filters);
@@ -107,6 +115,21 @@ export default function LibraryPage() {
 
   function handleCloseModal() {
     setSelectedCard(null);
+  }
+
+  function handleSavedCard(updatedCard) {
+    const stampedCard = {
+      ...updatedCard,
+      _imageVersion: Date.now(),
+    };
+
+    setCards((prev) =>
+      prev.map((existing) => (existing.id === updatedCard.id ? stampedCard : existing))
+    );
+  }
+  
+  function handleDeletedCard(deletedId) {
+  setCards((prev) => prev.filter((existing) => existing.id !== deletedId));
   }
 
   return (
@@ -166,6 +189,8 @@ export default function LibraryPage() {
         card={selectedCard}
         isOpen={Boolean(selectedCard)}
         onClose={handleCloseModal}
+        onSaved={handleSavedCard}
+        onDeleted={handleDeletedCard}
       />
     </PageContainer>
   );
