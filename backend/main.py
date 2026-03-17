@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db import SessionLocal, engine, Base
-from models import Card
+from models import Card, SubcategoryOption
 
 # ---------- Paths ----------
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +62,13 @@ def format_card_filename(group_code: str, card_id: int, side: str, original_ext:
     return f"{group_code}_{card_id:06d}_{side}{original_ext.lower()}"
 
 @app.post("/ingest/front")
-def ingest_front(filename: str, group_code: str = "skz"):
+def ingest_front(
+    filename: str,
+    group_code: str = "skz",
+    member: str | None = None,
+    top_level_category: str | None = None,
+    sub_category: str | None = None,
+):
     source_path = INBOX_DIR / filename
     if not source_path.exists() or not source_path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
@@ -74,7 +80,13 @@ def ingest_front(filename: str, group_code: str = "skz"):
     db = get_db()
     try:
         # Create row first so we get an auto-increment ID
-        card = Card(group_code=group_code, front_image_path="PENDING")
+        card = Card(
+            group_code=group_code,
+            front_image_path="PENDING",
+            member=member,
+            top_level_category=top_level_category,
+            sub_category=sub_category,
+        )
         db.add(card)
         db.commit()
         db.refresh(card)
@@ -90,11 +102,34 @@ def ingest_front(filename: str, group_code: str = "skz"):
         # Save relative path for portability
         rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
         card.front_image_path = rel_path
+
+        # If a category pair was provided, save it as a reusable option
+        if top_level_category and sub_category:
+            existing_option = (
+                db.query(SubcategoryOption)
+                .filter(
+                    SubcategoryOption.top_level_category == top_level_category,
+                    SubcategoryOption.value == sub_category,
+                )
+                .first()
+            )
+
+            if existing_option is None:
+                db.add(
+                    SubcategoryOption(
+                        top_level_category=top_level_category,
+                        value=sub_category,
+                    )
+                )
+
         db.commit()
 
         return {
             "id": card.id,
             "front_image_path": card.front_image_path,
+            "member": card.member,
+            "top_level_category": card.top_level_category,
+            "sub_category": card.sub_category,
             "message": f"Ingested {filename} -> {dest_path.name}",
         }
     except Exception:
@@ -196,5 +231,21 @@ def get_card_image_urls(card_id: int):
             "front_url": to_url(card.front_image_path),
             "back_url": to_url(card.back_image_path),
         }
+    finally:
+        db.close()
+
+
+@app.get("/subcategory-options")
+def get_subcategory_options(top_level_category: str):
+    db = get_db()
+    try:
+        options = (
+            db.query(SubcategoryOption)
+            .filter(SubcategoryOption.top_level_category == top_level_category)
+            .order_by(SubcategoryOption.value.asc())
+            .all()
+        )
+
+        return [option.value for option in options]
     finally:
         db.close()
