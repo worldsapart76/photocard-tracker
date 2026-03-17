@@ -1,16 +1,36 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, UniqueConstraint
 from sqlalchemy.sql import func
 from db import Base
+
 
 class Card(Base):
     __tablename__ = "cards"
 
-    id = Column(Integer, primary_key=True, index=True)  # numeric ID
-    group_code = Column(String, nullable=False, default="skz")  # future-proof
-    front_image_path = Column(String, nullable=False)  # relative to project root
+    id = Column(Integer, primary_key=True, index=True)
+    group_code = Column(String, nullable=False, default="skz")
+
+    # Relative paths like: images/library/skz_000001_f.jpg
+    front_image_path = Column(String, nullable=False)
     back_image_path = Column(String, nullable=True)
 
     member = Column(String, nullable=True)
+
+    # New fields
+    top_level_category = Column(String, nullable=True)
+    sub_category = Column(String, nullable=True)
+
     notes = Column(String, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SubcategoryOption(Base):
+    __tablename__ = "subcategory_options"
+
+    id = Column(Integer, primary_key=True, index=True)
+    top_level_category = Column(String, nullable=False)
+    value = Column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("top_level_category", "value", name="uq_top_level_value"),
+    )
