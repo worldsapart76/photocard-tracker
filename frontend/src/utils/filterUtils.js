@@ -41,6 +41,14 @@ export function filterCards(cards, filters) {
       return false;
     }
 
+    if (
+      filters.ownershipStatus &&
+      filters.ownershipStatus.length > 0 &&
+      !filters.ownershipStatus.includes(card.ownership_status)
+    ) {
+      return false;
+    }
+
     if (filters.backStatus.length > 0) {
       const hasBack = Boolean(card.back_image_path);
       const matchesHasBack = filters.backStatus.includes("has-back") && hasBack;

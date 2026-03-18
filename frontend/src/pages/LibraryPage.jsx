@@ -10,7 +10,7 @@ import { buildDisplayItems } from "../utils/libraryTransforms";
 import { filterCards } from "../utils/filterUtils";
 import { sortCards } from "../utils/sortUtils";
 import { useLibraryPagination } from "../hooks/useLibraryPagination";
-import { sortMembersForGroup } from "../utils/groupUtils";
+import { getMembersForGroup } from "../utils/groupUtils";
 
 const emptyFilters = {
   search: "",
@@ -18,6 +18,7 @@ const emptyFilters = {
   groupCodes: [],
   topLevelCategories: [],
   subCategories: [],
+  ownershipStatus: [],
   backStatus: [],
 };
 
@@ -52,23 +53,70 @@ export default function LibraryPage() {
     loadCards();
   }, []);
 
-const availableOptions = useMemo(() => {
-  const uniqueMembers = [...new Set(cards.map((c) => c.member).filter(Boolean))];
-  const uniqueGroupCodes = [...new Set(cards.map((c) => c.group_code).filter(Boolean))].sort();
-  const uniqueTopLevelCategories = [
-    ...new Set(cards.map((c) => c.top_level_category).filter(Boolean)),
-  ].sort();
-  const uniqueSubCategories = [...new Set(cards.map((c) => c.sub_category).filter(Boolean))].sort();
+  const availableOptions = useMemo(() => {
+    const uniqueGroupCodes = [...new Set(cards.map((c) => c.group_code).filter(Boolean))].sort();
 
-  const orderedMembers = sortMembersForGroup(uniqueMembers, "skz");
+    const activeGroupCodes =
+      filters.groupCodes.length > 0 ? filters.groupCodes : uniqueGroupCodes;
 
-  return {
-    members: orderedMembers,
-    groupCodes: uniqueGroupCodes,
-    topLevelCategories: uniqueTopLevelCategories,
-    subCategories: uniqueSubCategories,
-  };
-}, [cards]);
+    const activeTopLevelCategories =
+      filters.topLevelCategories.length > 0
+        ? filters.topLevelCategories
+        : [...new Set(cards.map((c) => c.top_level_category).filter(Boolean))].sort();
+
+    const cardsForMemberOptions = cards.filter((c) => activeGroupCodes.includes(c.group_code));
+
+    const availableMemberSet = new Set(
+      cardsForMemberOptions.map((c) => c.member).filter(Boolean)
+    );
+
+    const orderedMembers = [];
+    const seenMembers = new Set();
+
+    activeGroupCodes.forEach((groupCode) => {
+      const groupMembers = getMembersForGroup(groupCode) || [];
+      groupMembers.forEach((member) => {
+        if (availableMemberSet.has(member) && !seenMembers.has(member)) {
+          orderedMembers.push(member);
+          seenMembers.add(member);
+        }
+      });
+    });
+
+    const remainingMembers = [...availableMemberSet]
+      .filter((member) => !seenMembers.has(member))
+      .sort((a, b) => a.localeCompare(b));
+
+    const uniqueTopLevelCategories = [
+      ...new Set(
+        cards
+          .filter((c) => activeGroupCodes.includes(c.group_code))
+          .map((c) => c.top_level_category)
+          .filter(Boolean)
+      ),
+    ].sort();
+
+    const uniqueSubCategories = [
+      ...new Set(
+        cards
+          .filter((c) => activeGroupCodes.includes(c.group_code))
+          .filter(
+            (c) =>
+              activeTopLevelCategories.length === 0 ||
+              activeTopLevelCategories.includes(c.top_level_category)
+          )
+          .map((c) => c.sub_category)
+          .filter(Boolean)
+      ),
+    ].sort();
+
+    return {
+      members: [...orderedMembers, ...remainingMembers],
+      groupCodes: uniqueGroupCodes,
+      topLevelCategories: uniqueTopLevelCategories,
+      subCategories: uniqueSubCategories,
+    };
+  }, [cards, filters.groupCodes, filters.topLevelCategories]);
 
   const filteredCards = useMemo(() => {
     return filterCards(cards, filters);
@@ -127,9 +175,9 @@ const availableOptions = useMemo(() => {
       prev.map((existing) => (existing.id === updatedCard.id ? stampedCard : existing))
     );
   }
-  
+
   function handleDeletedCard(deletedId) {
-  setCards((prev) => prev.filter((existing) => existing.id !== deletedId));
+    setCards((prev) => prev.filter((existing) => existing.id !== deletedId));
   }
 
   return (
@@ -143,6 +191,7 @@ const availableOptions = useMemo(() => {
           onToggleGroupCode={(value) => toggleInArray("groupCodes", value)}
           onToggleTopLevelCategory={(value) => toggleInArray("topLevelCategories", value)}
           onToggleSubCategory={(value) => toggleInArray("subCategories", value)}
+          onToggleOwnershipStatus={(value) => toggleInArray("ownershipStatus", value)}
           onToggleBackStatus={(value) => toggleInArray("backStatus", value)}
           onClearAll={clearAllFilters}
         />
@@ -172,16 +221,16 @@ const availableOptions = useMemo(() => {
           {loading ? <div className="state-message">Loading library...</div> : null}
           {error ? <div className="state-message error">{error}</div> : null}
 
-			{pageItems.length === 0 ? (
-			  <div className="state-message">No cards match your filters.</div>
-			) : (
-			  <LibraryGrid
-				items={pageItems}
-				sizeMode={sizeMode}
-				captionsEnabled={captionsEnabled}
-				onSelectItem={handleSelectItem}
-			  />
-			)}
+          {pageItems.length === 0 ? (
+            <div className="state-message">No cards match your filters.</div>
+          ) : (
+            <LibraryGrid
+              items={pageItems}
+              sizeMode={sizeMode}
+              captionsEnabled={captionsEnabled}
+              onSelectItem={handleSelectItem}
+            />
+          )}
         </div>
       </div>
 
