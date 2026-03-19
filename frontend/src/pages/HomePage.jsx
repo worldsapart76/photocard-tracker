@@ -15,8 +15,15 @@ export default function HomePage() {
         <HomeTile
           title="Library"
           description="Browse collection"
-          countLabel="Library view coming next"
+          countLabel="Open library"
           to="/library"
+        />
+
+        <HomeTile
+          title="Export"
+          description="Create a shareable PDF"
+          countLabel="Open export tools"
+          to="/export"
         />
       </div>
     </PageContainer>

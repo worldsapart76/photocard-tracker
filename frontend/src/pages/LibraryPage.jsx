@@ -15,9 +15,10 @@ import { getMembersForGroup } from "../utils/groupUtils";
 const emptyFilters = {
   search: "",
   members: [],
-  groupCodes: [],
+  groupCodes: ["skz"],
   topLevelCategories: [],
   subCategories: [],
+  version: "",
   ownershipStatus: [],
   backStatus: [],
 };
@@ -110,11 +111,26 @@ export default function LibraryPage() {
       ),
     ].sort();
 
+    const uniqueVersions = [
+      ...new Set(
+        cards
+          .filter((c) => activeGroupCodes.includes(c.group_code))
+          .filter(
+            (c) =>
+              activeTopLevelCategories.length === 0 ||
+              activeTopLevelCategories.includes(c.top_level_category)
+          )
+          .map((c) => c.source)
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+
     return {
       members: [...orderedMembers, ...remainingMembers],
       groupCodes: uniqueGroupCodes,
       topLevelCategories: uniqueTopLevelCategories,
       subCategories: uniqueSubCategories,
+      versions: uniqueVersions,
     };
   }, [cards, filters.groupCodes, filters.topLevelCategories]);
 
@@ -191,6 +207,7 @@ export default function LibraryPage() {
           onToggleGroupCode={(value) => toggleInArray("groupCodes", value)}
           onToggleTopLevelCategory={(value) => toggleInArray("topLevelCategories", value)}
           onToggleSubCategory={(value) => toggleInArray("subCategories", value)}
+          onVersionChange={(value) => setFilters((prev) => ({ ...prev, version: value }))}
           onToggleOwnershipStatus={(value) => toggleInArray("ownershipStatus", value)}
           onToggleBackStatus={(value) => toggleInArray("backStatus", value)}
           onClearAll={clearAllFilters}

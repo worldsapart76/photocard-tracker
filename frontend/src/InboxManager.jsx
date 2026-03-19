@@ -3,6 +3,7 @@ import { getMembersForGroup } from "./utils/groupUtils";
 import {
   fetchInbox,
   fetchSubcategoryOptions,
+  fetchSourceOptions,
   ingestFront,
   fetchCardCandidates,
   attachBack,
@@ -22,6 +23,9 @@ export default function InboxManager() {
   const [subcategory, setSubcategory] = useState("");
   const [subcategoryOptions, setSubcategoryOptions] = useState([]);
 
+  const [version, setVersion] = useState("");
+  const [versionOptions, setVersionOptions] = useState([]);
+
   const [ownershipStatus, setOwnershipStatus] = useState("Owned");
   const [price, setPrice] = useState("");
 
@@ -35,16 +39,7 @@ export default function InboxManager() {
 
   const memberOptions = getMembersForGroup(groupCode);
 
-  function resetSelections() {
-    setMode("front");
-    setGroupCode("skz");
-    setMember("");
-    setTopCategory("");
-    setSubcategory("");
-    setSubcategoryOptions([]);
-    setOwnershipStatus("Owned");
-    setPrice("");
-    setIncludeCardsWithBack(false);
+  function clearTransientState() {
     setCandidates([]);
     setSelectedCandidateId(null);
     setMessage("");
@@ -63,14 +58,29 @@ export default function InboxManager() {
     }
   }
 
-  async function loadSubcategories(category) {
-    if (!category) {
-      setSubcategoryOptions([]);
+async function loadSubcategories(category) {
+  if (!category || !groupCode) {
+    setSubcategoryOptions([]);
+    return;
+  }
+
+  const data = await fetchSubcategoryOptions(groupCode, category);
+  setSubcategoryOptions(data);
+}
+
+  async function loadVersionOptions(category, subcat) {
+    if (!category || !subcat) {
+      setVersionOptions([]);
       return;
     }
 
-    const data = await fetchSubcategoryOptions(category);
-    setSubcategoryOptions(data);
+    try {
+      const data = await fetchSourceOptions(category, subcat);
+      setVersionOptions(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error(error);
+      setVersionOptions([]);
+    }
   }
 
   async function loadCandidates() {
@@ -116,12 +126,13 @@ export default function InboxManager() {
       member,
       topLevelCategory: topCategory,
       subCategory: subcategory,
+      version,
       ownershipStatus,
       price: price === "" ? "" : Number(price),
     });
 
     await loadInbox();
-    resetSelections();
+    clearTransientState();
   }
 
   async function saveBack(forceReplace = false) {
@@ -149,30 +160,32 @@ export default function InboxManager() {
 
     setWarningData(null);
     await loadInbox();
-    resetSelections();
+    clearTransientState();
   }
 
   function goPrevious() {
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1);
-      resetSelections();
+      clearTransientState();
     }
   }
 
   function goNext() {
     if (currentIndex < files.length - 1) {
       setCurrentIndex(currentIndex + 1);
-      resetSelections();
+      clearTransientState();
     }
   }
 
   function handleGroupChange(nextGroupCode) {
     setGroupCode(nextGroupCode);
     setMember("");
-    setSelectedCandidateId(null);
-    setWarningData(null);
-    setMessage("");
-    setCandidates([]);
+    setTopCategory("");
+    setSubcategory("");
+    setSubcategoryOptions([]);
+    setVersion("");
+    setVersionOptions([]);
+    clearTransientState();
   }
 
   useEffect(() => {
@@ -182,7 +195,11 @@ export default function InboxManager() {
 
   useEffect(() => {
     loadSubcategories(topCategory);
-  }, [topCategory]);
+  }, [topCategory, groupCode]);
+
+  useEffect(() => {
+    loadVersionOptions(topCategory, subcategory);
+  }, [topCategory, subcategory]);
 
   useEffect(() => {
     loadCandidates();
@@ -191,15 +208,25 @@ export default function InboxManager() {
 
   const current = files[currentIndex];
 
-  return (
-    <div style={{ padding: 12 }}>
-      <h2 style={{ marginTop: 0, marginBottom: 6, fontSize: 18 }}>Inbox Manager</h2>
+  const sectionTitleStyle = {
+    marginTop: 0,
+    marginBottom: 4,
+    fontSize: 15,
+    fontWeight: 700,
+  };
 
-      {!current && <p>No images in inbox.</p>}
+  const buttonStyle = {
+    padding: "2px 8px",
+    fontSize: 13,
+  };
+
+  return (
+    <div style={{ padding: 10, fontSize: 13 }}>
+      {!current && <p style={{ marginTop: 0 }}>No images in inbox.</p>}
 
       {current && (
         <>
-          <div style={{ marginBottom: 6, fontSize: 14 }}>
+          <div style={{ marginBottom: 6, fontSize: 13 }}>
             <strong>
               Image {currentIndex + 1} of {files.length}
             </strong>
@@ -229,7 +256,7 @@ export default function InboxManager() {
                   <button
                     onClick={goPrevious}
                     disabled={currentIndex === 0}
-                    style={{ padding: "2px 8px" }}
+                    style={buttonStyle}
                   >
                     Previous
                   </button>
@@ -237,26 +264,23 @@ export default function InboxManager() {
                   <button
                     onClick={goNext}
                     disabled={currentIndex === files.length - 1}
-                    style={{ padding: "2px 8px" }}
+                    style={buttonStyle}
                   >
                     Next
                   </button>
                 </div>
 
                 <div>
-                  <div style={{ fontWeight: "bold", marginBottom: 4 }}>Mode</div>
+                  <div style={{ fontWeight: "bold", marginBottom: 4, fontSize: 14 }}>Mode</div>
 
                   <button
                     onClick={() => {
                       setMode("front");
-                      setCandidates([]);
-                      setSelectedCandidateId(null);
-                      setWarningData(null);
-                      setMessage("");
+                      clearTransientState();
                     }}
                     style={{
+                      ...buttonStyle,
                       marginRight: 6,
-                      padding: "2px 8px",
                       background: mode === "front" ? "#88f" : "#eee",
                     }}
                   >
@@ -266,12 +290,10 @@ export default function InboxManager() {
                   <button
                     onClick={() => {
                       setMode("back");
-                      setSelectedCandidateId(null);
-                      setWarningData(null);
-                      setMessage("");
+                      clearTransientState();
                     }}
                     style={{
-                      padding: "2px 8px",
+                      ...buttonStyle,
                       background: mode === "back" ? "#88f" : "#eee",
                     }}
                   >
@@ -282,14 +304,14 @@ export default function InboxManager() {
             </div>
 
             <div style={{ flex: 1 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Group</h3>
+              <h3 style={sectionTitleStyle}>Group</h3>
 
               <div style={{ marginBottom: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button
                   type="button"
                   onClick={() => handleGroupChange("skz")}
                   style={{
-                    padding: "2px 8px",
+                    ...buttonStyle,
                     background: groupCode === "skz" ? "#88f" : "#eee",
                   }}
                 >
@@ -300,7 +322,7 @@ export default function InboxManager() {
                   type="button"
                   onClick={() => handleGroupChange("atz")}
                   style={{
-                    padding: "2px 8px",
+                    ...buttonStyle,
                     background: groupCode === "atz" ? "#88f" : "#eee",
                   }}
                 >
@@ -311,7 +333,7 @@ export default function InboxManager() {
                   type="button"
                   onClick={() => handleGroupChange("txt")}
                   style={{
-                    padding: "2px 8px",
+                    ...buttonStyle,
                     background: groupCode === "txt" ? "#88f" : "#eee",
                   }}
                 >
@@ -319,7 +341,7 @@ export default function InboxManager() {
                 </button>
               </div>
 
-              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Member</h3>
+              <h3 style={sectionTitleStyle}>Member</h3>
 
               <div style={{ marginBottom: 10 }}>
                 {memberOptions.map((m) => (
@@ -327,13 +349,11 @@ export default function InboxManager() {
                     key={m}
                     onClick={() => {
                       setMember(m);
-                      setSelectedCandidateId(null);
-                      setWarningData(null);
-                      setMessage("");
+                      clearTransientState();
                     }}
                     style={{
+                      ...buttonStyle,
                       margin: 2,
-                      padding: "2px 8px",
                       background: member === m ? "#88f" : "#eee",
                     }}
                   >
@@ -342,44 +362,96 @@ export default function InboxManager() {
                 ))}
               </div>
 
-              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Top Category</h3>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 24,
+                  flexWrap: "wrap",
+                  alignItems: "flex-start",
+                  marginBottom: 10,
+                }}
+              >
+                <div>
+                  <h3 style={sectionTitleStyle}>Top Category</h3>
 
-              <div style={{ marginBottom: 10 }}>
-                <button
-                  onClick={() => {
-                    setTopCategory("Album");
-                    setSubcategory("");
-                    setSelectedCandidateId(null);
-                    setWarningData(null);
-                  }}
-                  style={{
-                    marginRight: 6,
-                    padding: "2px 8px",
-                    background: topCategory === "Album" ? "#88f" : "#eee",
-                  }}
-                >
-                  Album
-                </button>
+                  <div>
+                    <button
+                      onClick={() => {
+                        setTopCategory("Album");
+                        setSubcategory("");
+                        setVersion("");
+                        setVersionOptions([]);
+                        clearTransientState();
+                      }}
+                      style={{
+                        ...buttonStyle,
+                        marginRight: 6,
+                        background: topCategory === "Album" ? "#88f" : "#eee",
+                      }}
+                    >
+                      Album
+                    </button>
 
-                <button
-                  onClick={() => {
-                    setTopCategory("Non-Album");
-                    setSubcategory("");
-                    setSelectedCandidateId(null);
-                    setWarningData(null);
-                  }}
-                  style={{
-                    padding: "2px 8px",
-                    background: topCategory === "Non-Album" ? "#88f" : "#eee",
-                  }}
-                >
-                  Non-Album
-                </button>
+                    <button
+                      onClick={() => {
+                        setTopCategory("Non-Album");
+                        setSubcategory("");
+                        setVersion("");
+                        setVersionOptions([]);
+                        clearTransientState();
+                      }}
+                      style={{
+                        ...buttonStyle,
+                        background: topCategory === "Non-Album" ? "#88f" : "#eee",
+                      }}
+                    >
+                      Non-Album
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 style={sectionTitleStyle}>Ownership Status</h3>
+
+                  <div>
+                    <button
+                      onClick={() => setOwnershipStatus("Owned")}
+                      style={{
+                        ...buttonStyle,
+                        marginRight: 6,
+                        background: ownershipStatus === "Owned" ? "#88f" : "#eee",
+                      }}
+                    >
+                      Owned
+                    </button>
+
+                    <button
+                      onClick={() => setOwnershipStatus("Want")}
+                      style={{
+                        ...buttonStyle,
+                        marginRight: 6,
+                        background: ownershipStatus === "Want" ? "#88f" : "#eee",
+                      }}
+                    >
+                      Want
+                    </button>
+
+                    <button
+                      onClick={() => setOwnershipStatus("For Trade")}
+                      style={{
+                        ...buttonStyle,
+                        background: ownershipStatus === "For Trade" ? "#88f" : "#eee",
+                      }}
+                    >
+                      For Trade
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {topCategory && (
                 <>
-                  <h3 style={{ marginTop: 0, marginBottom: 4 }}>Sub Category</h3>
+                  <h3 style={sectionTitleStyle}>Sub Category</h3>
 
                   <div style={{ marginBottom: 6 }}>
                     {subcategoryOptions.map((opt) => (
@@ -387,12 +459,12 @@ export default function InboxManager() {
                         key={opt}
                         onClick={() => {
                           setSubcategory(opt);
-                          setSelectedCandidateId(null);
-                          setWarningData(null);
+                          setVersion("");
+                          clearTransientState();
                         }}
                         style={{
+                          ...buttonStyle,
                           margin: 2,
-                          padding: "2px 8px",
                           background: subcategory === opt ? "#88f" : "#eee",
                         }}
                       >
@@ -407,52 +479,34 @@ export default function InboxManager() {
                       value={subcategory}
                       onChange={(e) => {
                         setSubcategory(e.target.value);
-                        setSelectedCandidateId(null);
-                        setWarningData(null);
+                        setVersion("");
+                        clearTransientState();
                       }}
-                      style={{ padding: 4, width: 250 }}
+                      style={{ padding: 4, width: 250, fontSize: 13 }}
                     />
+                  </div>
+
+                  <h3 style={sectionTitleStyle}>Version</h3>
+
+                  <div style={{ marginBottom: 10 }}>
+                    <input
+                      type="text"
+                      list="inbox-version-options"
+                      value={version}
+                      onChange={(e) => setVersion(e.target.value)}
+                      placeholder="Optional"
+                      style={{ padding: 4, width: 250, fontSize: 13 }}
+                    />
+                    <datalist id="inbox-version-options">
+                      {versionOptions.map((option) => (
+                        <option key={option} value={option} />
+                      ))}
+                    </datalist>
                   </div>
                 </>
               )}
 
-              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Ownership Status</h3>
-
-              <div style={{ marginBottom: 10 }}>
-                <button
-                  onClick={() => setOwnershipStatus("Owned")}
-                  style={{
-                    marginRight: 6,
-                    padding: "2px 8px",
-                    background: ownershipStatus === "Owned" ? "#88f" : "#eee",
-                  }}
-                >
-                  Owned
-                </button>
-
-                <button
-                  onClick={() => setOwnershipStatus("Want")}
-                  style={{
-                    marginRight: 6,
-                    padding: "2px 8px",
-                    background: ownershipStatus === "Want" ? "#88f" : "#eee",
-                  }}
-                >
-                  Want
-                </button>
-
-                <button
-                  onClick={() => setOwnershipStatus("For Trade")}
-                  style={{
-                    padding: "2px 8px",
-                    background: ownershipStatus === "For Trade" ? "#88f" : "#eee",
-                  }}
-                >
-                  For Trade
-                </button>
-              </div>
-
-              <h3 style={{ marginTop: 0, marginBottom: 4 }}>Price</h3>
+              <h3 style={sectionTitleStyle}>Price</h3>
 
               <div style={{ marginBottom: 10 }}>
                 <input
@@ -462,13 +516,13 @@ export default function InboxManager() {
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
                   placeholder="Optional"
-                  style={{ padding: 4, width: 120 }}
+                  style={{ padding: 4, width: 120, fontSize: 13 }}
                 />
               </div>
 
               {mode === "back" && (
                 <>
-                  <h3 style={{ marginTop: 0, marginBottom: 4 }}>Matching Front Cards</h3>
+                  <h3 style={sectionTitleStyle}>Matching Front Cards</h3>
 
                   <label style={{ display: "block", marginBottom: 6 }}>
                     <input
@@ -586,12 +640,12 @@ export default function InboxManager() {
                         setWarningData(null);
                         setMessage("");
                       }}
-                      style={{ padding: "2px 8px" }}
+                      style={buttonStyle}
                     >
                       Cancel
                     </button>
 
-                    <button onClick={() => saveBack(true)} style={{ padding: "2px 8px" }}>
+                    <button onClick={() => saveBack(true)} style={buttonStyle}>
                       Replace Anyway
                     </button>
                   </div>
@@ -599,11 +653,11 @@ export default function InboxManager() {
               )}
 
               {mode === "front" ? (
-                <button onClick={saveFront} style={{ padding: "4px 10px" }}>
+                <button onClick={saveFront} style={{ padding: "4px 10px", fontSize: 13 }}>
                   Save Front and Next
                 </button>
               ) : (
-                <button onClick={() => saveBack(false)} style={{ padding: "4px 10px" }}>
+                <button onClick={() => saveBack(false)} style={{ padding: "4px 10px", fontSize: 13 }}>
                   Attach Back and Next
                 </button>
               )}

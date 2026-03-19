@@ -83,16 +83,16 @@ export default function CardDetailModal({ card, isOpen, onClose, onSaved, onDele
 
   useEffect(() => {
     async function loadSubcategoryOptions() {
-      if (!formData.top_level_category) {
+      if (!card?.group_code || !formData.top_level_category) {
         setSubcategoryOptions([]);
         return;
       }
 
       try {
         const response = await fetch(
-          `${BACKEND_BASE_URL}/subcategory-options?top_level_category=${encodeURIComponent(
-            formData.top_level_category
-          )}`
+          `${BACKEND_BASE_URL}/subcategory-options?group_code=${encodeURIComponent(
+            card.group_code
+          )}&top_level_category=${encodeURIComponent(formData.top_level_category)}`
         );
 
         if (!response.ok) {
@@ -107,44 +107,43 @@ export default function CardDetailModal({ card, isOpen, onClose, onSaved, onDele
       }
     }
 
-    loadSubcategoryOptions();
-  }, [formData.top_level_category]);
-  
-  
-useEffect(() => {
-  async function loadSourceOptions() {
-    if (!formData.top_level_category || !formData.sub_category) {
-      setSourceOptions([]);
-      return;
+    if (isOpen) {
+      loadSubcategoryOptions();
     }
+  }, [isOpen, card?.group_code, formData.top_level_category]);
 
-    try {
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/source-options?top_level_category=${encodeURIComponent(
-          formData.top_level_category
-        )}&sub_category=${encodeURIComponent(formData.sub_category)}`
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to load source options: ${response.status}`);
+  useEffect(() => {
+    async function loadSourceOptions() {
+      if (!card?.group_code || !formData.top_level_category || !formData.sub_category) {
+        setSourceOptions([]);
+        return;
       }
 
-      const data = await response.json();
+      try {
+        const response = await fetch(
+          `${BACKEND_BASE_URL}/source-options?group_code=${encodeURIComponent(
+            card.group_code
+          )}&top_level_category=${encodeURIComponent(
+            formData.top_level_category
+          )}&sub_category=${encodeURIComponent(formData.sub_category)}`
+        );
 
-      console.log("Loaded source options:", data); // <-- DEBUG LINE
+        if (!response.ok) {
+          throw new Error(`Failed to load source options: ${response.status}`);
+        }
 
-      setSourceOptions(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error(error);
-      setSourceOptions([]);
+        const data = await response.json();
+        setSourceOptions(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error(error);
+        setSourceOptions([]);
+      }
     }
-  }
 
-  if (isOpen) {
-    loadSourceOptions();
-  }
-}, [isOpen, formData.top_level_category, formData.sub_category]);
-  
+    if (isOpen) {
+      loadSourceOptions();
+    }
+  }, [isOpen, card?.group_code, formData.top_level_category, formData.sub_category]);
 
   if (!isOpen || !card) return null;
 
@@ -444,7 +443,11 @@ useEffect(() => {
               <span>Category</span>
               <select
                 value={formData.top_level_category}
-                onChange={(e) => updateField("top_level_category", e.target.value)}
+                onChange={(e) => {
+                  updateField("top_level_category", e.target.value);
+                  updateField("sub_category", "");
+                  updateField("source", "");
+                }}
               >
                 <option value="">—</option>
                 <option value="Album">Album</option>
@@ -458,7 +461,10 @@ useEffect(() => {
                 type="text"
                 list="subcategory-options"
                 value={formData.sub_category}
-                onChange={(e) => updateField("sub_category", e.target.value)}
+                onChange={(e) => {
+                  updateField("sub_category", e.target.value);
+                  updateField("source", "");
+                }}
               />
               <datalist id="subcategory-options">
                 {subcategoryOptions.map((option) => (
@@ -468,7 +474,7 @@ useEffect(() => {
             </label>
 
             <label className="card-modal-field">
-              <span>Source</span>
+              <span>Version</span>
               <input
                 type="text"
                 list="source-options"
@@ -495,7 +501,7 @@ useEffect(() => {
             </label>
 
             <label className="card-modal-field">
-              <span>Price (cents for now)</span>
+              <span>Price</span>
               <input
                 type="number"
                 value={formData.price}

@@ -1,6 +1,6 @@
 export function filterCards(cards, filters) {
   return cards.filter((card) => {
-    const search = filters.search.trim().toLowerCase();
+    const search = (filters.search || "").trim().toLowerCase();
 
     if (search) {
       const haystack = [
@@ -9,6 +9,7 @@ export function filterCards(cards, filters) {
         card.sub_category,
         card.top_level_category,
         card.group_code,
+        card.source,
       ]
         .filter(Boolean)
         .join(" ")
@@ -37,6 +38,13 @@ export function filterCards(cards, filters) {
     if (
       filters.subCategories.length > 0 &&
       !filters.subCategories.includes(card.sub_category)
+    ) {
+      return false;
+    }
+
+    if (
+      filters.version &&
+      (card.source || "").toLowerCase() !== filters.version.toLowerCase()
     ) {
       return false;
     }

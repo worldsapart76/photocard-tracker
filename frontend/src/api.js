@@ -6,11 +6,25 @@ export async function fetchInbox() {
   return res.json();
 }
 
-export async function fetchSubcategoryOptions(topLevelCategory) {
+export async function fetchSubcategoryOptions(groupCode, topLevelCategory) {
   const res = await fetch(
-    `${API}/subcategory-options?top_level_category=${encodeURIComponent(topLevelCategory)}`
+    `${API}/subcategory-options?group_code=${encodeURIComponent(
+      groupCode
+    )}&top_level_category=${encodeURIComponent(topLevelCategory)}`
   );
   if (!res.ok) throw new Error("Failed to fetch subcategory options");
+  return res.json();
+}
+
+export async function fetchSourceOptions(groupCode, topLevelCategory, subCategory) {
+  const res = await fetch(
+    `${API}/source-options?group_code=${encodeURIComponent(
+      groupCode
+    )}&top_level_category=${encodeURIComponent(
+      topLevelCategory
+    )}&sub_category=${encodeURIComponent(subCategory)}`
+  );
+  if (!res.ok) throw new Error("Failed to fetch source options");
   return res.json();
 }
 
@@ -20,6 +34,7 @@ export async function ingestFront({
   member,
   topLevelCategory,
   subCategory,
+  version,
   ownershipStatus,
   price,
 }) {
@@ -31,6 +46,10 @@ export async function ingestFront({
     sub_category: subCategory,
     ownership_status: ownershipStatus,
   });
+
+  if (version !== "" && version !== null && version !== undefined) {
+    params.append("source", String(version));
+  }
 
   if (price !== "" && price !== null && price !== undefined) {
     params.append("price", String(price));
