@@ -1,6 +1,13 @@
 from pathlib import Path
 import shutil
+import subprocess
+
+print("LOADED BACKEND FILE:", __file__)
+
 from pydantic import BaseModel
+from export_pdf import build_pdf
+from fastapi.responses import FileResponse
+from tempfile import NamedTemporaryFile
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
@@ -67,9 +74,33 @@ class CardUpdateRequest(BaseModel):
     price: int | None = None
     notes: str | None = None
 
+class ExportPdfRequest(BaseModel):
+    ownership_types: list[str]
+    include_captions: bool = True
+    include_backs: bool = False
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "marker": "EXPORT_ROUTE_PRESENT"}
+
+@app.post("/shutdown")
+def shutdown_app():
+    shutdown_script = APP_ROOT / "Stop-PhotocardTracker.bat"
+
+    if not shutdown_script.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Shutdown script not found: {shutdown_script}",
+        )
+
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", str(shutdown_script)],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return {"ok": True, "message": "Shutdown started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start shutdown: {e}")
 
 @app.get("/inbox")
 def list_inbox():
@@ -113,11 +144,16 @@ def upload_to_inbox(file: UploadFile = File(...)):
         file.file.close()
 
 @app.get("/cards")
-def list_cards(limit: int = 50):
+def list_cards(limit: int | None = None):
     db = get_db()
     try:
-        stmt = select(Card).order_by(Card.id.desc()).limit(limit)
+        stmt = select(Card).order_by(Card.id.desc())
+
+        if limit is not None:
+            stmt = stmt.limit(limit)
+
         cards = db.execute(stmt).scalars().all()
+
         return [
             {
                 "id": c.id,
@@ -150,6 +186,7 @@ def ingest_front(
     member: str | None = None,
     top_level_category: str | None = None,
     sub_category: str | None = None,
+    source: str | None = None,
     ownership_status: str | None = None,
     price: int | None = None,
 ):
@@ -169,12 +206,12 @@ def ingest_front(
             member=member,
             top_level_category=top_level_category,
             sub_category=sub_category,
+            source=source,
             ownership_status=ownership_status,
             price=price,
         )
         db.add(card)
 
-        # Assign auto-increment ID without committing yet
         db.flush()
 
         new_name = format_card_filename(group_code, card.id, "f", ext)
@@ -188,10 +225,11 @@ def ingest_front(
         rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
         card.front_image_path = rel_path
 
-        if top_level_category and sub_category:
+        if group_code and top_level_category and sub_category:
             existing_option = (
                 db.query(SubcategoryOption)
                 .filter(
+                    SubcategoryOption.group_code == group_code,
                     SubcategoryOption.top_level_category == top_level_category,
                     SubcategoryOption.value == sub_category,
                 )
@@ -201,8 +239,31 @@ def ingest_front(
             if existing_option is None:
                 db.add(
                     SubcategoryOption(
+                        group_code=group_code,
                         top_level_category=top_level_category,
                         value=sub_category,
+                    )
+                )
+
+        if group_code and top_level_category and sub_category and source:
+            existing_source_option = (
+                db.query(SourceOption)
+                .filter(
+                    SourceOption.group_code == group_code,
+                    SourceOption.top_level_category == top_level_category,
+                    SourceOption.sub_category == sub_category,
+                    SourceOption.value == source,
+                )
+                .first()
+            )
+
+            if existing_source_option is None:
+                db.add(
+                    SourceOption(
+                        group_code=group_code,
+                        top_level_category=top_level_category,
+                        sub_category=sub_category,
+                        value=source,
                     )
                 )
 
@@ -215,6 +276,7 @@ def ingest_front(
             "member": card.member,
             "top_level_category": card.top_level_category,
             "sub_category": card.sub_category,
+            "source": card.source,
             "ownership_status": card.ownership_status,
             "price": card.price,
             "message": f"Ingested {filename} -> {dest_path.name}",
@@ -227,10 +289,6 @@ def ingest_front(
 
 @app.post("/ingest/back")
 def ingest_back(card_id: int, filename: str):
-    """
-    Attach a file from images/inbox as the BACK image for an existing card.
-    Moves it to images/library/<group>_<id>_b.ext and updates the DB row.
-    """
     source_path = INBOX_DIR / filename
     if not source_path.exists() or not source_path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found in inbox: {filename}")
@@ -322,14 +380,43 @@ def update_card(card_id: int, payload: CardUpdateRequest):
             "notes",
         }
 
+        old_group_code = card.group_code
+        old_top_level_category = card.top_level_category
+        old_sub_category = card.sub_category
+
         for key, value in updates.items():
             if key in allowed_fields:
                 setattr(card, key, value)
 
-        if card.top_level_category and card.sub_category and card.source:
+        effective_group_code = card.group_code or old_group_code
+        effective_top_level_category = card.top_level_category or old_top_level_category
+        effective_sub_category = card.sub_category or old_sub_category
+
+        if effective_group_code and effective_top_level_category and effective_sub_category:
+            existing_subcategory_option = (
+                db.query(SubcategoryOption)
+                .filter(
+                    SubcategoryOption.group_code == effective_group_code,
+                    SubcategoryOption.top_level_category == effective_top_level_category,
+                    SubcategoryOption.value == effective_sub_category,
+                )
+                .first()
+            )
+
+            if existing_subcategory_option is None:
+                db.add(
+                    SubcategoryOption(
+                        group_code=effective_group_code,
+                        top_level_category=effective_top_level_category,
+                        value=effective_sub_category,
+                    )
+                )
+
+        if card.group_code and card.top_level_category and card.sub_category and card.source:
             existing_source_option = (
                 db.query(SourceOption)
                 .filter(
+                    SourceOption.group_code == card.group_code,
                     SourceOption.top_level_category == card.top_level_category,
                     SourceOption.sub_category == card.sub_category,
                     SourceOption.value == card.source,
@@ -340,6 +427,7 @@ def update_card(card_id: int, payload: CardUpdateRequest):
             if existing_source_option is None:
                 db.add(
                     SourceOption(
+                        group_code=card.group_code,
                         top_level_category=card.top_level_category,
                         sub_category=card.sub_category,
                         value=card.source,
@@ -516,9 +604,6 @@ def replace_back_image(card_id: int, filename: str):
 
 @app.get("/cards/{card_id}/image_urls")
 def get_card_image_urls(card_id: int):
-    """
-    Returns URLs you can drop directly into <img src="..."> in the frontend.
-    """
     db = get_db()
     try:
         card = db.get(Card, card_id)
@@ -542,12 +627,15 @@ def get_card_image_urls(card_id: int):
         db.close()
 
 @app.get("/subcategory-options")
-def get_subcategory_options(top_level_category: str):
+def get_subcategory_options(group_code: str, top_level_category: str):
     db = get_db()
     try:
         options = (
             db.query(SubcategoryOption)
-            .filter(SubcategoryOption.top_level_category == top_level_category)
+            .filter(
+                SubcategoryOption.group_code == group_code,
+                SubcategoryOption.top_level_category == top_level_category,
+            )
             .order_by(SubcategoryOption.value.asc())
             .all()
         )
@@ -557,12 +645,13 @@ def get_subcategory_options(top_level_category: str):
         db.close()
 
 @app.get("/source-options")
-def get_source_options(top_level_category: str, sub_category: str):
+def get_source_options(group_code: str, top_level_category: str, sub_category: str):
     db = get_db()
     try:
         options = (
             db.query(SourceOption)
             .filter(
+                SourceOption.group_code == group_code,
                 SourceOption.top_level_category == top_level_category,
                 SourceOption.sub_category == sub_category,
             )
@@ -673,5 +762,46 @@ def attach_back(
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+@app.post("/export/pdf")
+def export_pdf_endpoint(payload: ExportPdfRequest):
+    db = get_db()
+    try:
+        cards = (
+            db.query(Card)
+            .filter(Card.ownership_status.in_(payload.ownership_types))
+            .order_by(Card.ownership_status.asc(), Card.id.asc())
+            .all()
+        )
+
+        grouped = {}
+        for card in cards:
+            grouped.setdefault(card.ownership_status, []).append(
+                {
+                    "front_image_path": card.front_image_path,
+                    "back_image_path": card.back_image_path,
+                    "sub_category": card.sub_category,
+                    "source": card.source,
+                }
+            )
+
+        temp_file = NamedTemporaryFile(delete=False, suffix=".pdf")
+        output_path = Path(temp_file.name)
+        temp_file.close()
+
+        build_pdf(
+            grouped,
+            payload.include_captions,
+            payload.include_backs,
+            output_path,
+        )
+
+        return FileResponse(
+            path=output_path,
+            filename="photocard_export.pdf",
+            media_type="application/pdf",
+        )
     finally:
         db.close()

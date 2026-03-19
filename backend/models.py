@@ -15,14 +15,12 @@ class Card(Base):
 
     member = Column(String, nullable=True)
 
-    # New fields
     top_level_category = Column(String, nullable=True)
     sub_category = Column(String, nullable=True)
 
-    # New fields (Step 2)
     source = Column(String, nullable=True)
     ownership_status = Column(String, nullable=False, default="Owned")
-    price = Column(Integer, nullable=True)  # store as integer cents for now
+    price = Column(Integer, nullable=True)
 
     notes = Column(String, nullable=True)
 
@@ -33,13 +31,20 @@ class SubcategoryOption(Base):
     __tablename__ = "subcategory_options"
 
     id = Column(Integer, primary_key=True, index=True)
+    group_code = Column(String, nullable=False, default="skz")
     top_level_category = Column(String, nullable=False)
     value = Column(String, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("top_level_category", "value", name="uq_top_level_value"),
+        UniqueConstraint(
+            "group_code",
+            "top_level_category",
+            "value",
+            name="uq_subcategory_group_top_level_value",
+        ),
     )
-    
+
+
 class SourceOption(Base):
     __tablename__ = "source_options"
 
