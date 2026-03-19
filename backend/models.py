@@ -9,7 +9,6 @@ class Card(Base):
     id = Column(Integer, primary_key=True, index=True)
     group_code = Column(String, nullable=False, default="skz")
 
-    # Relative paths like: images/library/skz_000001_f.jpg
     front_image_path = Column(String, nullable=False)
     back_image_path = Column(String, nullable=True)
 
@@ -49,15 +48,17 @@ class SourceOption(Base):
     __tablename__ = "source_options"
 
     id = Column(Integer, primary_key=True, index=True)
+    group_code = Column(String, nullable=False, default="skz")
     top_level_category = Column(String, nullable=False)
     sub_category = Column(String, nullable=False)
     value = Column(String, nullable=False)
 
     __table_args__ = (
         UniqueConstraint(
+            "group_code",
             "top_level_category",
             "sub_category",
             "value",
-            name="uq_source_top_level_sub_value",
+            name="uq_source_group_top_level_sub_value",
         ),
     )

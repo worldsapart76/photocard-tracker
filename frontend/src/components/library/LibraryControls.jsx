@@ -7,6 +7,8 @@ export default function LibraryControls({
   onSizeModeChange,
   onSortModeChange,
   onCaptionsToggle,
+  isSelectMode,
+  onToggleSelectMode,
 }) {
   return (
     <div className="library-controls">
@@ -66,6 +68,17 @@ export default function LibraryControls({
           onClick={() => onCaptionsToggle(!captionsEnabled)}
         >
           {captionsEnabled ? "On" : "Off"}
+        </button>
+      </div>
+
+      <div className="control-group">
+        <label>Select</label>
+        <button
+          type="button"
+          className={isSelectMode ? "toggle-on" : "toggle-off"}
+          onClick={onToggleSelectMode}
+        >
+          {isSelectMode ? "On" : "Off"}
         </button>
       </div>
     </div>

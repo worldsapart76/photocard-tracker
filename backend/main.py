@@ -1,15 +1,13 @@
 from pathlib import Path
 import shutil
 import subprocess
+from tempfile import NamedTemporaryFile
 
 print("LOADED BACKEND FILE:", __file__)
 
 from pydantic import BaseModel
-from export_pdf import build_pdf
-from fastapi.responses import FileResponse
-from tempfile import NamedTemporaryFile
-
 from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
@@ -17,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from db import SessionLocal, engine, Base
 from models import Card, SubcategoryOption, SourceOption
+from export_pdf import build_pdf
 
 # ---------- Paths ----------
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -43,8 +42,10 @@ app.mount("/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
 # ---------- DB init ----------
 Base.metadata.create_all(bind=engine)
 
+
 def get_db() -> Session:
     return SessionLocal()
+
 
 def get_image_version(rel_path: str | None):
     if not rel_path:
@@ -56,6 +57,7 @@ def get_image_version(rel_path: str | None):
 
     return int(file_path.stat().st_mtime_ns)
 
+
 def delete_image_file(rel_path: str | None):
     if not rel_path:
         return
@@ -64,6 +66,50 @@ def delete_image_file(rel_path: str | None):
     if file_path.exists() and file_path.is_file():
         file_path.unlink()
 
+
+def rebuild_option_tables(db: Session):
+    db.query(SubcategoryOption).delete()
+    db.query(SourceOption).delete()
+
+    cards = db.query(Card).all()
+
+    subcategory_keys = set()
+    source_keys = set()
+
+    for card in cards:
+        if card.group_code and card.top_level_category and card.sub_category:
+            subcategory_keys.add(
+                (card.group_code, card.top_level_category, card.sub_category)
+            )
+
+        if card.group_code and card.top_level_category and card.sub_category and card.source:
+            source_keys.add(
+                (card.group_code, card.top_level_category, card.sub_category, card.source)
+            )
+
+    for group_code, top_level_category, sub_category in sorted(subcategory_keys):
+        db.add(
+            SubcategoryOption(
+                group_code=group_code,
+                top_level_category=top_level_category,
+                value=sub_category,
+            )
+        )
+
+    for group_code, top_level_category, sub_category, source_value in sorted(source_keys):
+        db.add(
+            SourceOption(
+                group_code=group_code,
+                top_level_category=top_level_category,
+                sub_category=sub_category,
+                value=source_value,
+            )
+        )
+
+    db.flush()
+
+
+# ---------- Request models ----------
 class CardUpdateRequest(BaseModel):
     group_code: str | None = None
     member: str | None = None
@@ -74,14 +120,34 @@ class CardUpdateRequest(BaseModel):
     price: int | None = None
     notes: str | None = None
 
+
 class ExportPdfRequest(BaseModel):
     ownership_types: list[str]
     include_captions: bool = True
     include_backs: bool = False
 
+
+class BulkUpdateFieldAction(BaseModel):
+    action: str
+    value: str | None = None
+
+
+class BulkUpdateRequest(BaseModel):
+    card_ids: list[int]
+    member: BulkUpdateFieldAction | None = None
+    top_level_category: BulkUpdateFieldAction | None = None
+    sub_category: BulkUpdateFieldAction | None = None
+    source: BulkUpdateFieldAction | None = None
+    ownership_status: BulkUpdateFieldAction | None = None
+    price: BulkUpdateFieldAction | None = None
+    notes: BulkUpdateFieldAction | None = None
+
+
+# ---------- Basic routes ----------
 @app.get("/health")
 def health():
     return {"status": "ok", "marker": "EXPORT_ROUTE_PRESENT"}
+
 
 @app.post("/shutdown")
 def shutdown_app():
@@ -102,6 +168,7 @@ def shutdown_app():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start shutdown: {e}")
 
+
 @app.get("/inbox")
 def list_inbox():
     files = [p.name for p in INBOX_DIR.iterdir() if p.is_file()]
@@ -117,6 +184,7 @@ def list_inbox():
             for name in files
         ],
     }
+
 
 @app.post("/upload-to-inbox")
 def upload_to_inbox(file: UploadFile = File(...)):
@@ -142,6 +210,7 @@ def upload_to_inbox(file: UploadFile = File(...)):
         }
     finally:
         file.file.close()
+
 
 @app.get("/cards")
 def list_cards(limit: int | None = None):
@@ -176,9 +245,12 @@ def list_cards(limit: int | None = None):
     finally:
         db.close()
 
+
 def format_card_filename(group_code: str, card_id: int, side: str, original_ext: str) -> str:
     return f"{group_code}_{card_id:06d}_{side}{original_ext.lower()}"
 
+
+# ---------- Ingest ----------
 @app.post("/ingest/front")
 def ingest_front(
     filename: str,
@@ -211,7 +283,6 @@ def ingest_front(
             price=price,
         )
         db.add(card)
-
         db.flush()
 
         new_name = format_card_filename(group_code, card.id, "f", ext)
@@ -225,47 +296,7 @@ def ingest_front(
         rel_path = str(dest_path.relative_to(APP_ROOT)).replace("\\", "/")
         card.front_image_path = rel_path
 
-        if group_code and top_level_category and sub_category:
-            existing_option = (
-                db.query(SubcategoryOption)
-                .filter(
-                    SubcategoryOption.group_code == group_code,
-                    SubcategoryOption.top_level_category == top_level_category,
-                    SubcategoryOption.value == sub_category,
-                )
-                .first()
-            )
-
-            if existing_option is None:
-                db.add(
-                    SubcategoryOption(
-                        group_code=group_code,
-                        top_level_category=top_level_category,
-                        value=sub_category,
-                    )
-                )
-
-        if group_code and top_level_category and sub_category and source:
-            existing_source_option = (
-                db.query(SourceOption)
-                .filter(
-                    SourceOption.group_code == group_code,
-                    SourceOption.top_level_category == top_level_category,
-                    SourceOption.sub_category == sub_category,
-                    SourceOption.value == source,
-                )
-                .first()
-            )
-
-            if existing_source_option is None:
-                db.add(
-                    SourceOption(
-                        group_code=group_code,
-                        top_level_category=top_level_category,
-                        sub_category=sub_category,
-                        value=source,
-                    )
-                )
+        rebuild_option_tables(db)
 
         db.commit()
         db.refresh(card)
@@ -281,11 +312,12 @@ def ingest_front(
             "price": card.price,
             "message": f"Ingested {filename} -> {dest_path.name}",
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
 
 @app.post("/ingest/back")
 def ingest_back(card_id: int, filename: str):
@@ -327,12 +359,14 @@ def ingest_back(card_id: int, filename: str):
             "back_image_path": card.back_image_path,
             "message": f"Attached back {filename} -> {dest_path.name}",
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
+
+# ---------- Single card operations ----------
 @app.get("/cards/{card_id}")
 def get_card(card_id: int):
     db = get_db()
@@ -359,6 +393,7 @@ def get_card(card_id: int):
     finally:
         db.close()
 
+
 @app.put("/cards/{card_id}")
 def update_card(card_id: int, payload: CardUpdateRequest):
     db = get_db()
@@ -380,60 +415,12 @@ def update_card(card_id: int, payload: CardUpdateRequest):
             "notes",
         }
 
-        old_group_code = card.group_code
-        old_top_level_category = card.top_level_category
-        old_sub_category = card.sub_category
-
         for key, value in updates.items():
             if key in allowed_fields:
                 setattr(card, key, value)
 
-        effective_group_code = card.group_code or old_group_code
-        effective_top_level_category = card.top_level_category or old_top_level_category
-        effective_sub_category = card.sub_category or old_sub_category
-
-        if effective_group_code and effective_top_level_category and effective_sub_category:
-            existing_subcategory_option = (
-                db.query(SubcategoryOption)
-                .filter(
-                    SubcategoryOption.group_code == effective_group_code,
-                    SubcategoryOption.top_level_category == effective_top_level_category,
-                    SubcategoryOption.value == effective_sub_category,
-                )
-                .first()
-            )
-
-            if existing_subcategory_option is None:
-                db.add(
-                    SubcategoryOption(
-                        group_code=effective_group_code,
-                        top_level_category=effective_top_level_category,
-                        value=effective_sub_category,
-                    )
-                )
-
-        if card.group_code and card.top_level_category and card.sub_category and card.source:
-            existing_source_option = (
-                db.query(SourceOption)
-                .filter(
-                    SourceOption.group_code == card.group_code,
-                    SourceOption.top_level_category == card.top_level_category,
-                    SourceOption.sub_category == card.sub_category,
-                    SourceOption.value == card.source,
-                )
-                .first()
-            )
-
-            if existing_source_option is None:
-                db.add(
-                    SourceOption(
-                        group_code=card.group_code,
-                        top_level_category=card.top_level_category,
-                        sub_category=card.sub_category,
-                        value=card.source,
-                    )
-                )
-
+        db.flush()
+        rebuild_option_tables(db)
         db.commit()
         db.refresh(card)
 
@@ -453,11 +440,12 @@ def update_card(card_id: int, payload: CardUpdateRequest):
             "notes": card.notes,
             "created_at": str(card.created_at),
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
 
 @app.delete("/cards/{card_id}")
 def delete_card(card_id: int):
@@ -471,6 +459,8 @@ def delete_card(card_id: int):
         back_image_path = card.back_image_path
 
         db.delete(card)
+        db.flush()
+        rebuild_option_tables(db)
         db.commit()
 
         delete_image_file(front_image_path)
@@ -482,12 +472,14 @@ def delete_card(card_id: int):
             "deleted_front_image": bool(front_image_path),
             "deleted_back_image": bool(back_image_path),
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
+
+# ---------- Replace images ----------
 @app.post("/cards/{card_id}/replace-front")
 def replace_front_image(card_id: int, filename: str):
     source_path = INBOX_DIR / filename
@@ -539,11 +531,12 @@ def replace_front_image(card_id: int, filename: str):
             "created_at": str(card.created_at),
             "message": f"Replaced front image with {dest_path.name}",
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
 
 @app.post("/cards/{card_id}/replace-back")
 def replace_back_image(card_id: int, filename: str):
@@ -596,11 +589,12 @@ def replace_back_image(card_id: int, filename: str):
             "created_at": str(card.created_at),
             "message": f"Replaced back image with {dest_path.name}",
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
 
 @app.get("/cards/{card_id}/image_urls")
 def get_card_image_urls(card_id: int):
@@ -626,6 +620,8 @@ def get_card_image_urls(card_id: int):
     finally:
         db.close()
 
+
+# ---------- Option routes ----------
 @app.get("/subcategory-options")
 def get_subcategory_options(group_code: str, top_level_category: str):
     db = get_db()
@@ -644,6 +640,7 @@ def get_subcategory_options(group_code: str, top_level_category: str):
     finally:
         db.close()
 
+
 @app.get("/source-options")
 def get_source_options(group_code: str, top_level_category: str, sub_category: str):
     db = get_db()
@@ -660,9 +657,13 @@ def get_source_options(group_code: str, top_level_category: str, sub_category: s
         )
 
         return [option.value for option in options]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
+
+# ---------- Candidate matching ----------
 @app.get("/card-candidates")
 def get_card_candidates(
     group_code: str | None = None,
@@ -707,6 +708,7 @@ def get_card_candidates(
         ]
     finally:
         db.close()
+
 
 @app.post("/attach-back")
 def attach_back(
@@ -759,12 +761,14 @@ def attach_back(
             "message": f"Attached back {filename} -> {dest_path.name}",
             "replaced_existing": force_replace,
         }
-    except Exception:
+    except Exception as e:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
+
+# ---------- Export ----------
 @app.post("/export/pdf")
 def export_pdf_endpoint(payload: ExportPdfRequest):
     db = get_db()
@@ -803,5 +807,110 @@ def export_pdf_endpoint(payload: ExportPdfRequest):
             filename="photocard_export.pdf",
             media_type="application/pdf",
         )
+    finally:
+        db.close()
+
+
+# ---------- Bulk update ----------
+@app.post("/cards/bulk-update")
+def bulk_update_cards(payload: BulkUpdateRequest):
+    db = get_db()
+    try:
+        if not payload.card_ids:
+            raise HTTPException(status_code=400, detail="No card IDs provided.")
+
+        cards = (
+            db.query(Card)
+            .filter(Card.id.in_(payload.card_ids))
+            .all()
+        )
+
+        if not cards:
+            raise HTTPException(status_code=404, detail="No matching cards found.")
+
+        def apply_action(card, field_name: str, action_obj: BulkUpdateFieldAction | None):
+            if action_obj is None or action_obj.action == "leave":
+                return
+
+            if field_name in {"member", "top_level_category", "ownership_status"}:
+                if action_obj.action == "set":
+                    setattr(card, field_name, action_obj.value or None)
+                return
+
+            if field_name in {"sub_category", "source"}:
+                if action_obj.action == "set":
+                    setattr(card, field_name, action_obj.value or None)
+                elif action_obj.action == "clear":
+                    setattr(card, field_name, None)
+                return
+
+            if field_name == "price":
+                if action_obj.action == "set":
+                    if action_obj.value in (None, ""):
+                        setattr(card, field_name, None)
+                    else:
+                        setattr(card, field_name, int(action_obj.value))
+                elif action_obj.action == "clear":
+                    setattr(card, field_name, None)
+                return
+
+            if field_name == "notes":
+                if action_obj.action == "set":
+                    setattr(card, field_name, action_obj.value or None)
+                elif action_obj.action == "append":
+                    existing = card.notes or ""
+                    addition = action_obj.value or ""
+                    if existing and addition:
+                        card.notes = f"{existing}\n{addition}"
+                    elif addition:
+                        card.notes = addition
+                elif action_obj.action == "clear":
+                    setattr(card, field_name, None)
+                return
+
+        for card in cards:
+            apply_action(card, "member", payload.member)
+            apply_action(card, "top_level_category", payload.top_level_category)
+            apply_action(card, "sub_category", payload.sub_category)
+            apply_action(card, "source", payload.source)
+            apply_action(card, "ownership_status", payload.ownership_status)
+            apply_action(card, "price", payload.price)
+            apply_action(card, "notes", payload.notes)
+
+        db.flush()
+        rebuild_option_tables(db)
+        db.commit()
+
+        refreshed_cards = (
+            db.query(Card)
+            .filter(Card.id.in_(payload.card_ids))
+            .all()
+        )
+
+        return {
+            "updated_ids": [card.id for card in refreshed_cards],
+            "cards": [
+                {
+                    "id": c.id,
+                    "group_code": c.group_code,
+                    "front_image_path": c.front_image_path,
+                    "back_image_path": c.back_image_path,
+                    "front_image_version": get_image_version(c.front_image_path),
+                    "back_image_version": get_image_version(c.back_image_path),
+                    "member": c.member,
+                    "top_level_category": c.top_level_category,
+                    "sub_category": c.sub_category,
+                    "source": c.source,
+                    "ownership_status": c.ownership_status,
+                    "price": c.price,
+                    "notes": c.notes,
+                    "created_at": str(c.created_at),
+                }
+                for c in refreshed_cards
+            ],
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()

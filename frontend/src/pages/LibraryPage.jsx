@@ -5,6 +5,7 @@ import LibraryControls from "../components/library/LibraryControls";
 import LibraryPagination from "../components/library/LibraryPagination";
 import LibraryGrid from "../components/library/LibraryGrid";
 import CardDetailModal from "../components/library/CardDetailModal";
+import BulkEditPanel from "../components/library/BulkEditPanel";
 import { getCards } from "../services/libraryApi";
 import { buildDisplayItems } from "../utils/libraryTransforms";
 import { filterCards } from "../utils/filterUtils";
@@ -35,6 +36,11 @@ export default function LibraryPage() {
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
 
   const [filters, setFilters] = useState(emptyFilters);
+
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedCardIds, setSelectedCardIds] = useState([]);
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [isApplyingBulkEdit, setIsApplyingBulkEdit] = useState(false);
 
   useEffect(() => {
     async function loadCards() {
@@ -173,7 +179,39 @@ export default function LibraryPage() {
     setFilters(emptyFilters);
   }
 
+  function toggleSelectMode() {
+    setIsSelectMode((prev) => {
+      const next = !prev;
+      if (!next) {
+        setSelectedCardIds([]);
+        setIsBulkEditOpen(false);
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedCardIds([]);
+    setIsBulkEditOpen(false);
+  }
+
+  function selectAllOnPage() {
+    const pageCardIds = pageItems.map((item) => item.card.id);
+    setSelectedCardIds((prev) => {
+      const merged = new Set([...prev, ...pageCardIds]);
+      return [...merged];
+    });
+  }
+
   function handleSelectItem(item) {
+    if (isSelectMode) {
+      const cardId = item.card.id;
+      setSelectedCardIds((prev) =>
+        prev.includes(cardId) ? prev.filter((id) => id !== cardId) : [...prev, cardId]
+      );
+      return;
+    }
+
     setSelectedCard(item.card);
   }
 
@@ -194,7 +232,55 @@ export default function LibraryPage() {
 
   function handleDeletedCard(deletedId) {
     setCards((prev) => prev.filter((existing) => existing.id !== deletedId));
+    setSelectedCardIds((prev) => prev.filter((id) => id !== deletedId));
   }
+
+  async function handleApplyBulkEdit(fieldPayload) {
+    if (selectedCardIds.length === 0) return;
+
+    setIsApplyingBulkEdit(true);
+    setError("");
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/cards/bulk-update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          card_ids: selectedCardIds,
+          ...fieldPayload,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Bulk update failed.");
+      }
+
+      const result = await response.json();
+      const updatedCards = Array.isArray(result.cards) ? result.cards : [];
+
+      setCards((prev) =>
+        prev.map((existing) => {
+          const match = updatedCards.find((updated) => updated.id === existing.id);
+          return match ? { ...match, _imageVersion: Date.now() } : existing;
+        })
+      );
+
+      setSelectedCardIds([]);
+      setIsBulkEditOpen(false);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to apply bulk changes.");
+    } finally {
+      setIsApplyingBulkEdit(false);
+    }
+  }
+
+  const selectedCards = useMemo(() => {
+    return cards.filter((card) => selectedCardIds.includes(card.id));
+  }, [cards, selectedCardIds]);
 
   return (
     <PageContainer className="library-page">
@@ -223,7 +309,51 @@ export default function LibraryPage() {
             onSizeModeChange={setSizeMode}
             onSortModeChange={setSortMode}
             onCaptionsToggle={setCaptionsEnabled}
+            isSelectMode={isSelectMode}
+            onToggleSelectMode={toggleSelectMode}
           />
+
+          {isSelectMode ? (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                flexWrap: "wrap",
+                marginBottom: 10,
+                padding: "8px 10px",
+                border: "1px solid #ccc",
+                borderRadius: 8,
+                background: "#f7f7f7",
+              }}
+            >
+              <strong>{selectedCardIds.length} selected</strong>
+
+              <button
+                type="button"
+                onClick={selectAllOnPage}
+                disabled={pageItems.length === 0}
+              >
+                Select All on Page
+              </button>
+
+              <button
+                type="button"
+                onClick={clearSelection}
+                disabled={selectedCardIds.length === 0}
+              >
+                Clear Selection
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsBulkEditOpen(true)}
+                disabled={selectedCardIds.length === 0}
+              >
+                Bulk Edit
+              </button>
+            </div>
+          ) : null}
 
           <LibraryPagination
             currentPage={currentPage}
@@ -246,9 +376,21 @@ export default function LibraryPage() {
               sizeMode={sizeMode}
               captionsEnabled={captionsEnabled}
               onSelectItem={handleSelectItem}
+              isSelectMode={isSelectMode}
+              selectedCardIds={selectedCardIds}
             />
           )}
         </div>
+
+        <BulkEditPanel
+          isOpen={isBulkEditOpen}
+          selectedCount={selectedCardIds.length}
+          selectedCards={selectedCards}
+          allCards={cards}
+          onClose={() => setIsBulkEditOpen(false)}
+          onApply={handleApplyBulkEdit}
+          isApplying={isApplyingBulkEdit}
+        />
       </div>
 
       <CardDetailModal
