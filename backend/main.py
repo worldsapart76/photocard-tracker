@@ -122,7 +122,7 @@ class CardUpdateRequest(BaseModel):
 
 
 class ExportPdfRequest(BaseModel):
-    ownership_types: list[str]
+    card_ids: list[int]
     include_captions: bool = True
     include_backs: bool = False
 
@@ -773,15 +773,20 @@ def attach_back(
 def export_pdf_endpoint(payload: ExportPdfRequest):
     db = get_db()
     try:
+        if not payload.card_ids:
+            raise HTTPException(status_code=400, detail="No cards provided.")
+
         cards = (
             db.query(Card)
-            .filter(Card.ownership_status.in_(payload.ownership_types))
-            .order_by(Card.ownership_status.asc(), Card.id.asc())
+            .filter(Card.id.in_(payload.card_ids))
             .all()
         )
 
+        card_map = {card.id: card for card in cards}
+        ordered_cards = [card_map[card_id] for card_id in payload.card_ids if card_id in card_map]
+
         grouped = {}
-        for card in cards:
+        for card in ordered_cards:
             grouped.setdefault(card.ownership_status, []).append(
                 {
                     "front_image_path": card.front_image_path,

@@ -16,6 +16,21 @@ function toImageUrl(path) {
   return `${BACKEND_BASE_URL}/${path}`;
 }
 
+function getOwnershipBadge(status) {
+  if (!status) return null;
+
+  switch (status) {
+    case "Owned":
+      return { label: "O", color: "#00ff66" };
+    case "Want":
+      return { label: "W", color: "#ffd600" };
+    case "For Trade":
+      return { label: "T", color: "#ff3b3b" };
+    default:
+      return null;
+  }
+}
+
 export default function CardPairItem({
   card,
   frontImagePath,
@@ -25,6 +40,8 @@ export default function CardPairItem({
   isSelectMode = false,
   isSelected = false,
 }) {
+  const badge = getOwnershipBadge(card.ownership_status);
+
   return (
     <button
       type="button"
@@ -54,7 +71,7 @@ export default function CardPairItem({
             borderRadius: 3,
             border: "1px solid #666",
             background: isSelected ? "#4a67ff" : "#fff",
-            zIndex: 2,
+            zIndex: 3,
           }}
         />
       ) : null}
@@ -69,6 +86,7 @@ export default function CardPairItem({
       >
         <div
           style={{
+            position: "relative",
             aspectRatio: "2.5 / 3.5",
             overflow: "hidden",
             borderRight: "1px solid #ddd",
@@ -86,6 +104,26 @@ export default function CardPairItem({
               display: "block",
             }}
           />
+
+          {badge ? (
+            <div
+              style={{
+                position: "absolute",
+                bottom: 4,
+                left: 4,
+                background: "#000",
+                color: badge.color,
+                fontWeight: 700,
+                fontSize: 12,
+                lineHeight: "12px",
+                padding: "3px 5px",
+                borderRadius: 4,
+                zIndex: 2,
+              }}
+            >
+              {badge.label}
+            </div>
+          ) : null}
         </div>
 
         <div
